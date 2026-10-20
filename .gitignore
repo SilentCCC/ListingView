@@ -1,0 +1,31 @@
+# Dependencies and generated build output
+**/node_modules/
+**/dist/
+**/.vite/
+coverage/
+*.tsbuildinfo
+
+# Local environment files and secrets; keep example templates tracked
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Runtime state and logs
+.listingview-process.json
+*.log
+
+# Local product data and SQLite databases (including journal/WAL files)
+data/
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.sqlite3
+*.db
+*.db-*
+*.db.*
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini

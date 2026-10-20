@@ -1,0 +1,19 @@
+{
+  "name": "listing-view",
+  "private": true,
+  "version": "1.0.0",
+  "description": "跨平台电商商品详情预览工具",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server run start",
+    "test": "npm --prefix server run test",
+    "typecheck": "npm --prefix client run typecheck && npm --prefix server run typecheck",
+    "install:all": "npm install && npm --prefix client install && npm --prefix server install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

@@ -1,0 +1,191 @@
+.preview-shell { width: 100%; overflow: hidden; border-radius: 12px; background: #fff; border: 1px solid #e6eaf0; box-shadow: 0 9px 28px rgba(22, 34, 55, .08); }
+.preview-shell--mobile { display: flex; justify-content: center; background: #edf0f5; padding: 18px; }
+.preview-shell--mobile .market-frame { width: 390px; max-width: 100%; box-shadow: 0 12px 35px rgba(32,44,67,.15); }
+.market-frame { width: 100%; overflow: hidden; color: #0f1111; background: #fff; }
+.preview-placeholder { min-height: 400px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; color: #98a4b6; background: linear-gradient(145deg,#f8fafc,#eef2f6); }
+.preview-placeholder span { font-size: 16px; font-weight: 800; }
+.preview-placeholder small { font-size: 11px; }
+
+.amazon-frame { color: #0f1111; font-family: "Amazon Ember", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; background: #fff; }
+.amazon-topbar { min-height: 60px; background: #131921; color: #fff; display: grid; grid-template-columns: auto auto minmax(220px,1fr) auto auto auto auto; align-items: center; gap: 14px; padding: 6px 18px; }
+.market-logo { position: relative; width: 84px; padding: 3px 0 9px; color: #fff; font-size: 24px; line-height: 1; font-weight: 800; letter-spacing: -1.4px; white-space: nowrap; }
+.market-logo::after { content: ''; position: absolute; left: 16px; bottom: 2px; width: 46px; height: 8px; border-bottom: 3px solid #ff9900; border-radius: 0 0 60% 60%; transform: rotate(-3deg); }
+.amazon-location, .amazon-account, .amazon-orders, .amazon-cart, .amazon-language { display: flex; align-items: center; white-space: nowrap; }
+.amazon-location { gap: 4px; padding: 5px 4px; }
+.amazon-location > div, .amazon-account, .amazon-orders { display: flex; flex-direction: column; }
+.amazon-location small, .amazon-account small, .amazon-orders small { color: #ccc; font-size: 11px; line-height: 1.15; }
+.amazon-location strong, .amazon-account strong, .amazon-orders strong, .amazon-cart strong { color: #fff; font-size: 13px; line-height: 1.2; font-weight: 700; }
+.amazon-account strong { display: flex; align-items: center; gap: 2px; }
+.amazon-search { height: 40px; min-width: 0; display: flex; overflow: hidden; background: #fff; border-radius: 4px; outline: 2px solid transparent; }
+.amazon-search:focus-within { outline-color: #ff9900; }
+.amazon-search-category { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 0 10px; border: 0; border-right: 1px solid #cdcdcd; background: #e6e6e6; color: #555; font-size: 12px; }
+.amazon-search-input { min-width: 0; flex: 1; display: flex; align-items: center; padding: 0 11px; color: #6f7373; font-size: 14px; }
+.amazon-search-submit { width: 45px; flex: 0 0 45px; display: grid; place-items: center; border: 0; background: #febd69; color: #111; }
+.amazon-language { gap: 3px; padding: 8px 2px; font-size: 12px; }
+.amazon-cart { gap: 4px; padding-top: 6px; }
+.amazon-cart strong { align-self: flex-end; }
+.amazon-subnav { min-height: 39px; display: flex; align-items: center; gap: 18px; padding: 0 18px; overflow: hidden; background: #232f3e; color: #fff; white-space: nowrap; font-size: 13px; }
+.amazon-subnav > span { flex: 0 0 auto; }
+.amazon-subnav-all { display: flex; align-items: center; gap: 5px; font-weight: 700; }
+.market-breadcrumb { min-height: 34px; display: flex; align-items: center; gap: 5px; padding: 0 22px; color: #565959; font-size: 12px; }
+.market-breadcrumb strong { min-width: 0; overflow: hidden; color: #565959; font-weight: 400; white-space: nowrap; text-overflow: ellipsis; }
+
+.amazon-product-layout { display: grid; grid-template-columns: minmax(320px, 1.05fr) minmax(300px, 1.15fr) 248px; gap: 24px; align-items: start; padding: 10px 22px 26px; }
+.amazon-gallery { position: sticky; top: 12px; min-width: 0; display: grid; grid-template-columns: 44px minmax(0,1fr); grid-template-areas: "thumbs hero"; gap: 12px; align-items: start; }
+.amazon-thumbnails { grid-area: thumbs; display: flex; flex-direction: column; gap: 7px; max-height: 490px; overflow: auto; scrollbar-width: thin; padding: 1px; }
+.amazon-thumbnails button { flex: 0 0 40px; width: 40px; height: 50px; padding: 2px; overflow: hidden; border: 1px solid #888c8c; border-radius: 7px; background: #fff; }
+.amazon-thumbnails button:hover, .amazon-thumbnails button.active { border-color: #007185; box-shadow: 0 0 0 2px #c8f3fa, 0 0 0 3px rgba(0,113,133,.35); }
+.amazon-thumbnails img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.thumb-placeholder { width: 40px; height: 50px; display: grid; place-content: center; border: 1px dashed #c8cccc; border-radius: 7px; color: #7a8288; font-size: 10px; text-align: center; }
+.amazon-main-stage { grid-area: hero; min-width: 0; }
+.amazon-main-image { position: relative; min-width: 0; width: 100%; aspect-ratio: 1 / 1; max-height: 520px; display: grid; place-items: center; overflow: hidden; background: #fff; }
+.amazon-image-preview { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.amazon-image-preview img { display: block; width: 100%; height: 100%; max-height: 520px; object-fit: contain; }
+.amazon-image-preview:focus-visible, .amazon-detail-images button:focus-visible, .amazon-recommendation-card__image:focus-visible { outline: 2px solid #007185; outline-offset: 2px; }
+.amazon-main-image .preview-placeholder { width: 100%; height: 100%; min-height: 320px; }
+.amazon-image-share { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #d5d9d9; border-radius: 50%; background: rgba(255,255,255,.94); color: #0f1111; }
+.amazon-zoom-caption { margin-top: 8px; color: #565959; font-size: 12px; text-align: center; }
+
+.amazon-summary { min-width: 0; }
+.amazon-visit-line { margin-bottom: 4px; color: #007185; font-size: 13px; line-height: 1.35; }
+.amazon-visit-line span { font-weight: 500; }
+.amazon-summary h1 { color: #0f1111; font-size: 24px; line-height: 1.32; font-weight: 400; overflow-wrap: anywhere; }
+.amazon-meta-line { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 8px 0 10px; color: #565959; font-size: 13px; }
+.amazon-meta-line strong { color: #007185; font-weight: 500; }
+.amazon-meta-dot { color: #8d9096; }
+.amazon-divider { height: 1px; background: #e7e7e7; margin: 12px 0; }
+
+.amazon-price, .amazon-buybox-price, .amazon-recommendation-price { display: inline-flex; align-items: flex-start; color: #0f1111; line-height: 1; }
+.amazon-currency, .amazon-price-fraction { position: relative; top: .18em; font-size: 13px; font-weight: 500; }
+.amazon-price .amazon-price-whole, .amazon-buybox-price .amazon-price-whole { font-size: 28px; font-weight: 500; letter-spacing: -.03em; }
+.amazon-price--unset, .amazon-buybox-price--unset, .amazon-price-unset { color: #565959; font-size: 16px; font-weight: 500; }
+.amazon-price-block { display: grid; gap: 6px; }
+.amazon-price-block > small { color: #565959; font-size: 12px; line-height: 1.45; }
+
+.amazon-spec-table { display: grid; gap: 7px; font-size: 13px; line-height: 1.4; }
+.amazon-spec-table > div { display: grid; grid-template-columns: 140px minmax(0,1fr); gap: 10px; }
+.amazon-spec-table span { color: #0f1111; font-weight: 700; }
+.amazon-spec-table strong { color: #565959; font-weight: 400; overflow-wrap: anywhere; }
+.amazon-about h2 { margin: 0 0 8px; color: #0f1111; font-size: 16px; font-weight: 700; }
+.amazon-about ul { margin: 0; padding-left: 18px; display: grid; gap: 7px; color: #0f1111; font-size: 14px; line-height: 1.45; }
+
+.amazon-buybox { min-width: 0; padding: 14px 16px; border: 1px solid #d5d9d9; border-radius: 8px; background: #fff; }
+.amazon-buybox-main { min-width: 0; }
+.amazon-buybox-copy { display: grid; gap: 6px; margin-top: 10px; color: #565959; font-size: 13px; line-height: 1.38; }
+.amazon-buybox-location { display: inline-flex; align-items: center; gap: 4px; color: #007185; font-size: 12px; }
+.amazon-stock-line { margin-top: 12px; color: #007600; font-size: 15px; font-weight: 500; }
+.amazon-quantity { width: 100%; min-height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding: 0 10px; border: 1px solid #d5d9d9; border-radius: 8px; background: #f0f2f2; box-shadow: 0 2px 5px rgba(15,17,17,.08); color: #0f1111; font-size: 13px; }
+.amazon-purchase-actions { display: grid; gap: 8px; margin-top: 10px; }
+.amazon-cart-button, .amazon-buy-button { min-height: 33px; border: 1px solid transparent; border-radius: 999px; color: #0f1111; font-size: 13px; font-weight: 500; }
+.amazon-cart-button { background: #ffd814; border-color: #fcd200; }
+.amazon-buy-button { background: #ffa41c; border-color: #ff8f00; }
+.amazon-buybox-meta { margin: 12px 0 0; display: grid; gap: 5px; font-size: 12px; line-height: 1.35; }
+.amazon-buybox-meta > div { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 6px; }
+.amazon-buybox-meta dt { color: #565959; }
+.amazon-buybox-meta dd { margin: 0; color: #007185; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amazon-wishlist { width: 100%; min-height: 30px; margin-top: 12px; padding: 0 10px; border: 1px solid #888c8c; border-radius: 8px; background: #fff; color: #0f1111; font-size: 13px; text-align: left; }
+
+.amazon-carousel-section { margin: 0 22px; padding: 18px 0 22px; border-top: 1px solid #d5d9d9; }
+.amazon-carousel-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.amazon-carousel-header h2 { margin: 0; color: #0f1111; font-size: 20px; line-height: 1.3; font-weight: 700; }
+.amazon-carousel-header span { color: #565959; font-size: 13px; white-space: nowrap; }
+.amazon-carousel-shell { display: grid; grid-template-columns: 34px minmax(0,1fr) 34px; gap: 10px; align-items: center; }
+.amazon-carousel-arrow { width: 34px; height: 37px; display: grid; place-items: center; border: 1px solid #d5d9d9; border-radius: 8px; background: #fff; box-shadow: 0 2px 5px rgba(15,17,17,.08); color: #0f1111; }
+.amazon-recommendations__list { display: grid; grid-template-columns: repeat(6, minmax(136px, 1fr)); gap: 16px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }
+.amazon-recommendation-card { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.amazon-recommendation-card__image { width: 100%; aspect-ratio: 1 / 1; padding: 6px; border: 0; display: grid; place-items: center; overflow: hidden; background: #fff; cursor: zoom-in; }
+.amazon-recommendation-card__image:disabled { cursor: default; }
+.amazon-recommendation-card__image img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.amazon-recommendation-card__title { display: -webkit-box; overflow: hidden; color: #007185; font-size: 13px; line-height: 1.35; font-weight: 400; text-decoration: none; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.amazon-recommendation-card__title:hover { color: #c7511f; text-decoration: underline; }
+.amazon-recommendation-card__sku { color: #565959; font-size: 11px; }
+.amazon-recommendation-price .amazon-price-whole { font-size: 21px; font-weight: 500; }
+.amazon-recommendation-price .amazon-currency, .amazon-recommendation-price .amazon-price-fraction { font-size: 11px; }
+.amazon-recommendation-card--empty { min-height: 220px; border: 1px dashed #eaeded; border-radius: 8px; background: #fcfdfd; }
+.amazon-recommendation-card--empty .amazon-recommendation-card__image { background: transparent; }
+
+.amazon-detail-section { margin: 0 22px; padding: 18px 0 28px; border-top: 1px solid #d5d9d9; }
+.amazon-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.amazon-detail-heading__left { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+.amazon-detail-heading h2 { margin: 0; color: #0f1111; font-size: 20px; font-weight: 700; }
+.amazon-detail-heading span { color: #565959; font-size: 12px; }
+.amazon-detail-images { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 0; background: #fff; }
+.amazon-detail-single { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.amazon-detail-single img { display: block; width: 100%; height: auto; object-fit: contain; }
+.amazon-detail-carousel { width: 100%; min-width: 0; padding: 0; background: transparent; }
+.amazon-detail-carousel__stage { position: relative; width: calc(100% + 128px); margin: 0 -64px; background: #fff; overflow: hidden; }
+.amazon-detail-carousel__track { display: flex; align-items: flex-start; gap: 0; width: 100%; transition: transform 420ms cubic-bezier(.22,.68,0,1); will-change: transform; }
+.amazon-detail-carousel__slide { display: block; flex: 0 0 calc(100% - 128px); min-width: 0; padding: 0; touch-action: pan-y; border: 0; border-radius: 4px; background: #fff; cursor: zoom-in; overflow: hidden; }
+.amazon-detail-carousel__slide img { display: block; width: 100%; height: auto; object-fit: contain; }
+.amazon-detail-carousel__nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 38px; height: 42px; padding: 0; border: 1px solid #d5d9d9; border-radius: 8px; background: rgba(255,255,255,.94); box-shadow: 0 2px 6px rgba(15,17,17,.15); color: #0f1111; display: grid; place-items: center; cursor: pointer; }
+.amazon-detail-carousel__nav:hover { background: #f7fafa; border-color: #a6acab; }
+.amazon-detail-carousel__nav--prev { left: 64px; }
+.amazon-detail-carousel__nav--next { right: 64px; }
+.amazon-detail-carousel__nav:disabled { opacity: .35; cursor: default; }
+.amazon-detail-carousel__badge { position: absolute; right: 76px; bottom: 12px; z-index: 2; padding: 3px 9px; border-radius: 999px; background: rgba(15,17,17,.72); color: #fff; font-size: 11px; font-weight: 600; pointer-events: none; }
+.amazon-detail-images button:focus-visible { outline-offset: -2px; }
+.amazon-detail-empty { padding: 44px 20px; color: #7a8288; font-size: 12px; text-align: center; }
+
+/* The preview's mobile device is a fixed-width viewport, independent of browser window width. */
+.amazon-frame.mobile .amazon-topbar { min-height: 94px; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "logo cart" "search search"; gap: 7px 10px; padding: 8px 11px; }
+.amazon-frame.mobile .market-logo { grid-area: logo; width: 74px; font-size: 21px; }
+.amazon-frame.mobile .amazon-location, .amazon-frame.mobile .amazon-language, .amazon-frame.mobile .amazon-account, .amazon-frame.mobile .amazon-orders { display: none; }
+.amazon-frame.mobile .amazon-cart { grid-area: cart; padding: 2px 4px; }
+.amazon-frame.mobile .amazon-cart strong { font-size: 11px; }
+.amazon-frame.mobile .amazon-search { grid-area: search; height: 37px; }
+.amazon-frame.mobile .amazon-search-category { padding: 0 7px; font-size: 10px; }
+.amazon-frame.mobile .amazon-search-submit { width: 39px; flex-basis: 39px; }
+.amazon-frame.mobile .amazon-subnav { min-height: 36px; gap: 15px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; font-size: 12px; }
+.amazon-frame.mobile .amazon-subnav::-webkit-scrollbar { display: none; }
+.amazon-frame.mobile .market-breadcrumb { min-height: 32px; gap: 3px; padding: 0 12px; font-size: 11px; }
+.amazon-frame.mobile .amazon-product-layout { grid-template-columns: minmax(0,1fr); gap: 14px; padding: 10px 12px 18px; }
+.amazon-frame.mobile .amazon-gallery { position: static; grid-template-columns: minmax(0,1fr); grid-template-areas: "hero" "thumbs"; gap: 8px; }
+.amazon-frame.mobile .amazon-thumbnails { flex-direction: row; max-height: none; overflow-x: auto; padding: 2px 1px 5px; }
+.amazon-frame.mobile .amazon-thumbnails button, .amazon-frame.mobile .amazon-thumbnails .thumb-placeholder { flex: 0 0 46px; width: 46px; height: 46px; }
+.amazon-frame.mobile .amazon-summary h1 { font-size: 17px; }
+.amazon-frame.mobile .amazon-spec-table > div { grid-template-columns: 112px minmax(0,1fr); }
+.amazon-frame.mobile .amazon-buybox { grid-column: auto; display: block; padding: 14px 12px; }
+.amazon-frame.mobile .amazon-carousel-section, .amazon-frame.mobile .amazon-detail-section { margin: 0 12px; }
+.amazon-frame.mobile .amazon-carousel-header h2, .amazon-frame.mobile .amazon-detail-heading h2 { font-size: 16px; }
+.amazon-frame.mobile .amazon-carousel-shell { grid-template-columns: minmax(0,1fr); }
+.amazon-frame.mobile .amazon-carousel-arrow { display: none; }
+.amazon-frame.mobile .amazon-recommendations__list { grid-auto-flow: column; grid-auto-columns: 138px; grid-template-columns: none; gap: 12px; }
+.amazon-frame.mobile .amazon-detail-heading { align-items: flex-start; gap: 8px; }
+.amazon-frame.mobile .amazon-detail-heading__left { flex-direction: column; gap: 4px; }
+.amazon-frame.mobile .amazon-detail-carousel__nav { width: 30px; height: 36px; background: rgba(255,255,255,.72); }
+.amazon-frame.mobile .amazon-detail-empty { padding: 28px 12px; }
+
+@media (max-width: 1080px) {
+  .amazon-topbar { grid-template-columns: auto auto minmax(170px,1fr) auto auto; gap: 10px; padding-right: 14px; padding-left: 14px; }
+  .amazon-language, .amazon-orders { display: none; }
+  .amazon-product-layout { grid-template-columns: minmax(250px,.95fr) minmax(280px,1.05fr); gap: 20px; padding: 16px; }
+  .amazon-gallery { position: static; }
+  .amazon-buybox { grid-column: 1 / -1; }
+}
+
+@media (max-width: 560px) {
+  .preview-shell--mobile { padding: 0; border-radius: 10px; }
+  .preview-shell--mobile .market-frame { width: 390px; max-width: 100%; }
+  .amazon-topbar { min-height: 94px; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "logo cart" "search search"; gap: 7px 10px; padding: 8px 11px; }
+  .market-logo { grid-area: logo; width: 74px; font-size: 21px; }
+  .amazon-location, .amazon-language, .amazon-account, .amazon-orders { display: none; }
+  .amazon-cart { grid-area: cart; padding: 2px 4px; }
+  .amazon-cart strong { font-size: 11px; }
+  .amazon-search { grid-area: search; height: 37px; }
+  .amazon-search-category { padding: 0 7px; font-size: 10px; }
+  .amazon-search-submit { width: 39px; flex-basis: 39px; }
+  .amazon-subnav { min-height: 36px; gap: 15px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; font-size: 12px; }
+  .amazon-subnav::-webkit-scrollbar { display: none; }
+  .market-breadcrumb { min-height: 32px; gap: 3px; padding: 0 12px; font-size: 11px; }
+  .amazon-product-layout { grid-template-columns: minmax(0,1fr); gap: 14px; padding: 10px 12px 18px; }
+  .amazon-gallery { position: static; grid-template-columns: minmax(0,1fr); grid-template-areas: "hero" "thumbs"; gap: 8px; }
+  .amazon-thumbnails { flex-direction: row; max-height: none; overflow-x: auto; padding: 2px 1px 5px; }
+  .amazon-thumbnails button, .thumb-placeholder { flex: 0 0 46px; width: 46px; height: 46px; }
+  .amazon-summary h1 { font-size: 17px; }
+  .amazon-spec-table > div { grid-template-columns: 112px minmax(0,1fr); }
+  .amazon-buybox { grid-column: auto; display: block; padding: 14px 12px; }
+  .amazon-carousel-section, .amazon-detail-section { margin: 0 12px; }
+  .amazon-carousel-shell { grid-template-columns: minmax(0,1fr); }
+  .amazon-carousel-arrow { display: none; }
+  .amazon-recommendations__list { grid-auto-flow: column; grid-auto-columns: 138px; grid-template-columns: none; gap: 12px; }
+}
