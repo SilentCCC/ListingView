@@ -4,10 +4,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import initSqlJs from 'sql.js';
+import { testImageExport } from './image-export.test.ts';
 
 const serverRoot = path.resolve(process.cwd());
 const dataDir = path.join(os.tmpdir(), `listing-view-test-${Date.now()}`);
-const port = 4317;
+const port = Number(process.env.TEST_PORT || 4317);
 fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
 const SQL = await initSqlJs({ locateFile: (file) => path.join(serverRoot, 'node_modules', 'sql.js', 'dist', file) });
 const legacyDatabase = new SQL.Database();
@@ -21,10 +22,20 @@ legacyDatabase.run(`
   INSERT INTO platform_content (product_id, platform, title, price) VALUES (1, 'tmall', '', NULL);
   INSERT INTO images (id, product_id, scope, kind, original_name, stored_name, mime_type, size_bytes, sort_order) VALUES (1, 1, 'amazon', 'detail', 'legacy.png', 'legacy.png', 'image/png', 68, 0);
 `);
+legacyDatabase.run(`
+  INSERT INTO products (id, name, sku) VALUES (2, 'Legacy duplicate images', 'DEDUP-LEGACY');
+  INSERT INTO platform_content (product_id, platform) VALUES (2, 'amazon'), (2, 'tmall');
+  INSERT INTO images (id, product_id, scope, kind, original_name, stored_name, mime_type, size_bytes, sort_order) VALUES
+    (2, 2, 'common', 'main', 'same.png', 'duplicate-common.png', 'image/png', 68, 0),
+    (3, 2, 'amazon', 'main', 'different-name.png', 'duplicate-amazon.png', 'image/png', 68, 0),
+    (4, 2, 'tmall', 'main', 'third-name.png', 'duplicate-tmall.png', 'image/png', 68, 0),
+    (5, 2, 'common', 'detail', 'same.png', 'duplicate-detail.png', 'image/png', 68, 0);
+`);
 fs.writeFileSync(path.join(dataDir, 'listing-view.sqlite'), Buffer.from(legacyDatabase.export()));
 legacyDatabase.close();
 const legacyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 fs.writeFileSync(path.join(dataDir, 'uploads', 'legacy.png'), legacyPng);
+for (const filename of ['duplicate-common.png', 'duplicate-amazon.png', 'duplicate-tmall.png', 'duplicate-detail.png']) fs.writeFileSync(path.join(dataDir, 'uploads', filename), legacyPng);
 let visionProviderMode: 'success' | 'malformed' = 'success';
 let visionCalls = 0;
 let visionReceivedImage = false;
@@ -55,8 +66,8 @@ if (!providerAddress || typeof providerAddress === 'string') throw new Error('vi
 const visionBaseUrl = `http://127.0.0.1:${providerAddress.port}/v1`;
 let child: ReturnType<typeof spawn> | null = null;
 const base = `http://127.0.0.1:${port}`;
-function startApp(withVision = false) {
-  child = spawn(process.execPath, [path.join(serverRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), 'src/index.ts'], {
+function startApp(withVision = false, adminPassword = '') {
+  child = spawn(process.execPath, [...(process.env.TEST_BUILT_SERVER === '1' ? ['dist/index.js'] : [path.join(serverRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), 'src/index.ts'])], {
     cwd: serverRoot,
     env: {
       ...process.env,
@@ -65,6 +76,7 @@ function startApp(withVision = false) {
       VISION_API_BASE_URL: withVision ? visionBaseUrl : '',
       VISION_API_KEY: withVision ? 'test-vision-key' : '',
       VISION_MODEL: withVision ? 'test-vision-model' : '',
+      ADMIN_PASSWORD: adminPassword,
     },
     stdio: 'pipe',
   });
@@ -91,6 +103,12 @@ function assert(condition: unknown, message: string): asserts condition { if (!c
 try {
   startApp();
   await waitForServer();
+  await testImageExport(base, dataDir);
+  if (process.env.TEST_BUILT_SERVER === '1') {
+    const html = await fetch(base).then((r) => r.text());
+    const script = html.match(/src="([^"]+\.js)"/);
+    assert(html.includes('<div id="root">') && script && (await fetch(`${base}${script[1]}`)).ok, 'production frontend and built assets must be served');
+  }
   const initialVisionStatus = await fetch(`${base}/api/vision/status`).then((response) => response.json()) as { configured: boolean };
   assert(initialVisionStatus.configured === false, 'vision status should hide an unconfigured provider');
   const list = await fetch(`${base}/api/products`).then((response) => response.json()) as { products: any[] };
@@ -109,15 +127,17 @@ try {
   form.append('files', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')], { type: 'image/png' }), 'test.png');
   const uploaded = await fetch(`${base}/api/products/${created.product.id}/images`, { method: 'POST', body: form }).then((response) => response.json()) as { product: any };
   assert(uploaded.product.images.length === 1, 'upload failed');
+  assert(uploaded.product.images[0].storedName.startsWith(`${created.product.sku}/主图/`), 'new uploads must use the SKU and kind subdirectories');
   const unconfiguredRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageIds: [uploaded.product.images[0].id] }),
   });
   assert(unconfiguredRecognition.status === 503, 'recognition should explain when the provider is unconfigured');
 
+  let uploadSequence = 0;
   const uploadImage = async (scope: 'common' | 'amazon', device: 'all' | 'desktop' | 'mobile', kind = 'detail') => {
     const imageForm = new FormData();
     imageForm.append('scope', scope); imageForm.append('kind', kind); imageForm.append('device', device);
-    imageForm.append('files', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')], { type: 'image/png' }), `${scope}-${device}.png`);
+    imageForm.append('files', new Blob([Buffer.concat([legacyPng, Buffer.from(`image-${++uploadSequence}`)])], { type: 'image/png' }), `${scope}-${device}.png`);
     const response = await fetch(`${base}/api/products/${created.product.id}/images`, { method: 'POST', body: imageForm });
     assert(response.ok, `upload failed for ${scope}/${device}`);
     return response.json() as Promise<{ product: any }>;
@@ -202,9 +222,9 @@ try {
 
   // Test importing common images into platform-specific slots and 2D grid row/column ordering
   const commonDetailUpload = new FormData();
-  commonDetailUpload.append('files', new Blob([legacyPng], { type: 'image/png' }), 'common-detail-1.png');
-  commonDetailUpload.append('files', new Blob([legacyPng], { type: 'image/png' }), 'common-detail-2.png');
-  commonDetailUpload.append('files', new Blob([legacyPng], { type: 'image/png' }), 'common-detail-3.png');
+  commonDetailUpload.append('files', new Blob([Buffer.concat([legacyPng, Buffer.from('common-detail-1')])], { type: 'image/png' }), 'common-detail-1.png');
+  commonDetailUpload.append('files', new Blob([Buffer.concat([legacyPng, Buffer.from('common-detail-2')])], { type: 'image/png' }), 'common-detail-2.png');
+  commonDetailUpload.append('files', new Blob([Buffer.concat([legacyPng, Buffer.from('common-detail-3')])], { type: 'image/png' }), 'common-detail-3.png');
   commonDetailUpload.append('scope', 'common');
   commonDetailUpload.append('kind', 'detail');
   commonDetailUpload.append('device', 'all');
@@ -218,7 +238,7 @@ try {
   assert(importedMainRes.status === 201, 'importing common main images to amazon main failed');
   const importedMainBody = await importedMainRes.json() as { product: any };
   const amazonMains = importedMainBody.product.images.filter((img: any) => img.scope === 'amazon' && img.kind === 'main');
-  assert(amazonMains.length === 1 && amazonMains[0].url !== uploaded.product.images[0].url, 'imported main image should clone stored file');
+  assert(amazonMains.length === 1 && amazonMains[0].url === uploaded.product.images[0].url, 'imported main image should reference the common stored file');
 
   const importedDesktopRes = await fetch(`${base}/api/products/${created.product.id}/images/import`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -254,8 +274,250 @@ try {
     reorderedDesktop[4].id === desktopDetails[4].id && reorderedDesktop[4].rowOrder === 1 && reorderedDesktop[4].colOrder === 1,
     '2D grid rowOrder and colOrder were not persisted accurately'
   );
+  const saveProduct = (id: number, sku: string) => fetch(`${base}/api/products/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'API Test Product Updated', sku, genericTitle: 'updated', genericPrice: 99, platforms: { amazon: { title: '', price: null }, tmall: { title: '天猫更新', price: 99 } } }),
+  });
+  const readProduct = async (id: number) => (await fetch(`${base}/api/products/${id}`).then((r) => r.json()) as { product: any }).product;
+  const readBytes = async (image: any) => {
+    const response = await fetch(`${base}${image.url}`);
+    assert(response.ok, `image is not served: ${image.url}`);
+    return Buffer.from(await response.arrayBuffer());
+  };
+  const beforeSave = await readProduct(created.product.id);
+  const originalBytes = new Map<number, Buffer>();
+  for (const image of beforeSave.images) originalBytes.set(image.id, await readBytes(image));
+  const assertPreserved = async (product: any) => {
+    assert(product.images.length === originalBytes.size, 'saving must preserve every image reference');
+    for (const image of product.images) {
+      assert((await readBytes(image)).equals(originalBytes.get(image.id)!), `image content changed for ID ${image.id}`);
+      const original = beforeSave.images.find((item: any) => item.id === image.id);
+      assert(image.scope === original.scope && image.device === original.device && image.rowOrder === original.rowOrder && image.colOrder === original.colOrder, 'saving changed platform layout');
+    }
+  };
+  const renamed = await saveProduct(created.product.id, '5188');
+  assert(renamed.ok, `saving should rename image files: ${await renamed.text()}`);
+  let savedProduct = await readProduct(created.product.id);
+  await assertPreserved(savedProduct);
+  const skuDirectory = path.join(dataDir, 'uploads', '5188');
+  assert(fs.readdirSync(skuDirectory).sort().join(',') === ['主图', '详情图'].sort().join(','), 'SKU must contain only image kind directories');
+  const mainFiles = fs.readdirSync(path.join(skuDirectory, '主图'));
+  const detailFiles = fs.readdirSync(path.join(skuDirectory, '详情图'));
+  assert(mainFiles.length === 1 && mainFiles.includes('5188-主图-01.png'), 'imported main must share one physical file');
+  for (const name of ['5188-详情图-01.png', '5188-亚马逊-详情图-01.png', '5188-亚马逊-电脑-详情图-01.png', '5188-亚马逊-手机-详情图-01.png']) {
+    assert(detailFiles.includes(name), `missing classified image: ${name}`);
+  }
+  assert(mainFiles.length + detailFiles.length === new Set(savedProduct.images.map((image: any) => image.storedName)).size, 'imports duplicated physical files');
+  assert(!fs.existsSync(path.join(dataDir, 'uploads', created.product.sku)), 'old empty SKU directory was not removed');
+
+  // Swapping sequential filenames must preserve ID -> content and shared references.
+  const commonDetails = savedProduct.images.filter((image: any) => image.scope === 'common' && image.kind === 'detail');
+  const urlsBeforeSwap = new Map(savedProduct.images.map((image: any) => [image.storedName, image.url]));
+  const reverseIds = commonDetails.map((image: any) => image.id).reverse();
+  const reverseResponse = await fetch(`${base}/api/products/${created.product.id}/images/order`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scope: 'common', kind: 'detail', device: 'all', imageIds: reverseIds }),
+  });
+  assert(reverseResponse.ok, 'common detail reorder failed');
+  assert((await saveProduct(created.product.id, '5188')).ok, 'save after filename swap failed');
+  savedProduct = await readProduct(created.product.id);
+  for (const image of savedProduct.images) assert((await readBytes(image)).equals(originalBytes.get(image.id)!), 'swapping filenames mixed image contents');
+  const firstAfterSwap = savedProduct.images.find((image: any) => image.id === reverseIds[0]);
+  assert(firstAfterSwap.storedName === '5188/详情图/5188-详情图-01.png', 'filenames did not follow new order');
+  assert(firstAfterSwap.url !== urlsBeforeSwap.get(firstAfterSwap.storedName), 'reused filenames must not reuse the previous image cache identity');
+  assert(savedProduct.images.filter((image: any) => image.device === 'desktop').every((image: any) => {
+    const original = beforeSave.images.find((item: any) => item.id === image.id);
+    return image.rowOrder === original.rowOrder && image.colOrder === original.colOrder;
+  }), 'common reorder affected the platform grid');
+
+  // An unknown destination file must survive a rejected save.
+  const occupied = path.join(dataDir, 'uploads', 'blocked', '主图', 'blocked-主图-01.png');
+  fs.mkdirSync(path.dirname(occupied), { recursive: true });
+  fs.writeFileSync(occupied, 'do not overwrite');
+  assert((await saveProduct(created.product.id, 'blocked')).status === 409, 'existing target file must reject save');
+  assert(fs.readFileSync(occupied, 'utf8') === 'do not overwrite', 'unknown destination file was overwritten');
+  assert((await readProduct(created.product.id)).sku === '5188', 'failed save changed SKU');
+  fs.unlinkSync(occupied); fs.rmdirSync(path.dirname(occupied)); fs.rmdirSync(path.dirname(path.dirname(occupied)));
+
+  // Force a failure after staging files: the new detail directory is a file.
+  const blockedParent = path.join(dataDir, 'uploads', 'rollback');
+  fs.mkdirSync(blockedParent);
+  fs.writeFileSync(path.join(blockedParent, '详情图'), 'blocked directory');
+  assert(!(await saveProduct(created.product.id, 'rollback')).ok, 'invalid destination directory should reject save');
+  const rolledBack = await readProduct(created.product.id);
+  assert(rolledBack.sku === '5188', 'failed move changed product metadata');
+  for (const image of rolledBack.images) assert((await readBytes(image)).equals(originalBytes.get(image.id)!), 'failed move did not restore source files');
+  assert(!fs.readdirSync(path.join(dataDir, 'uploads')).some((name) => name.startsWith('.__listingview_rename_')), 'rollback left staged files');
+  fs.unlinkSync(path.join(blockedParent, '详情图')); fs.rmdirSync(blockedParent);
+
+  const missingImage = savedProduct.images.find((image: any) => image.device === 'mobile');
+  const missingPath = path.join(dataDir, 'uploads', ...missingImage.storedName.split('/'));
+  const outsideBackup = path.join(dataDir, 'missing-image-backup.png');
+  fs.renameSync(missingPath, outsideBackup);
+  assert((await saveProduct(created.product.id, 'missing-source')).status === 404, 'missing source file must reject save');
+  fs.renameSync(outsideBackup, missingPath);
+  for (const image of (await readProduct(created.product.id)).images) assert((await readBytes(image)).equals(originalBytes.get(image.id)!), 'mid-staging failure lost an original image');
+  assert(!fs.existsSync(path.join(dataDir, 'uploads', 'missing-source')), 'failed staging should not create a new SKU directory');
+
+  // Block the final SQLite replacement and verify both files and in-memory data roll back.
+  const databasePath = path.join(dataDir, 'listing-view.sqlite');
+  const databaseBackup = path.join(dataDir, 'database-backup.sqlite');
+  fs.renameSync(databasePath, databaseBackup);
+  fs.mkdirSync(databasePath);
+  try {
+    assert(!(await saveProduct(created.product.id, 'database-failure')).ok, 'failed database persistence must reject save');
+    const afterDatabaseFailure = await readProduct(created.product.id);
+    assert(afterDatabaseFailure.sku === '5188', 'failed database persistence changed SKU in memory');
+    for (const image of afterDatabaseFailure.images) assert((await readBytes(image)).equals(originalBytes.get(image.id)!), 'failed persistence changed image references or content');
+    assert(!fs.existsSync(path.join(dataDir, 'uploads', 'database-failure')), 'failed persistence left a moved SKU directory');
+  } finally {
+    fs.rmdirSync(databasePath); fs.renameSync(databaseBackup, databasePath);
+  }
+
+  assert((await saveProduct(created.product.id, 'Sku-Renamed')).ok, 'changing SKU should move all files');
+  assert(!fs.existsSync(skuDirectory), 'previous SKU directory should be empty and removed');
+  assert((await saveProduct(created.product.id, 'sku-renamed')).ok, 'case-only SKU rename should work on both platforms');
+  savedProduct = await readProduct(created.product.id);
+  for (const image of savedProduct.images) {
+    assert(image.storedName.startsWith('sku-renamed/'), 'SKU directory not updated');
+    assert((await readBytes(image)).equals(originalBytes.get(image.id)!), 'SKU rename changed content');
+  }
+  const createSku = (sku: string) => fetch(`${base}/api/products`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Path test', sku }) });
+  assert((await createSku('SKU-RENAMED')).status === 409, 'case-insensitive directory conflict must be rejected');
+  assert((await createSku('..')).status === 400, 'dot directory must be rejected');
+  assert((await createSku('a'.repeat(200))).status === 400, 'overlong directory component must be rejected');
+  for (const [sku, expected] of [['A/B', 'A-B'], ['CON', '_CON'], ['中文编号', '中文编号'], ['.hidden', '_.hidden']]) {
+    const response = await createSku(sku);
+    assert(response.ok, `safe SKU normalization failed: ${sku}`);
+    const { product } = await response.json() as { product: any };
+    const testForm = new FormData(); testForm.append('files', new Blob([legacyPng], { type: 'image/png' }), 'original.png');
+    assert((await fetch(`${base}/api/products/${product.id}/images`, { method: 'POST', body: testForm })).ok, 'upload for normalized SKU failed');
+    assert((await saveProduct(product.id, sku)).ok, 'normalized SKU save failed');
+    const normalized = await readProduct(product.id);
+    assert(normalized.images[0].storedName === `${expected}/主图/${expected}-主图-01.png`, 'unsafe or Unicode directory normalization mismatch');
+    assert((await readBytes(normalized.images[0])).equals(legacyPng), 'normalized path is unreadable');
+    if (sku === 'A/B') assert((await createSku('A-B')).status === 409, 'sanitized directory collision must be rejected');
+    await fetch(`${base}/api/products/${product.id}`, { method: 'DELETE' });
+    assert(!fs.existsSync(path.join(dataDir, 'uploads', expected)), 'deleting product did not clean empty directories');
+  }
+
+  // Separately uploaded identical bytes reuse storage; filenames and positions do not matter.
+  const dedupCreate = await createSku('DEDUP-NEW');
+  const dedupId = (await dedupCreate.json() as { product: any }).product.id;
+  const uploadFor = async (productId: number, scope: string, kind: string, contents: Buffer[], filename = 'same.png') => {
+    const imageForm = new FormData(); imageForm.append('scope', scope); imageForm.append('kind', kind);
+    for (const bytes of contents) imageForm.append('files', new Blob([bytes], { type: 'image/png' }), filename);
+    return fetch(`${base}/api/products/${productId}/images`, { method: 'POST', body: imageForm });
+  };
+  assert((await uploadFor(dedupId, 'amazon', 'main', [legacyPng])).ok, 'platform-first upload failed');
+  assert((await saveProduct(dedupId, 'DEDUP-NEW')).ok, 'platform-first save failed');
+  assert((await uploadFor(dedupId, 'common', 'main', [legacyPng], 'renamed-identical.png')).ok, 'common duplicate upload failed');
+  let dedupProduct = await readProduct(dedupId);
+  assert(dedupProduct.images.length === 2 && new Set(dedupProduct.images.map((image: any) => image.storedName)).size === 1, 're-uploading identical bytes should share one file immediately');
+  assert((await saveProduct(dedupId, 'DEDUP-NEW')).ok, 'common naming ownership failed');
+  dedupProduct = await readProduct(dedupId);
+  assert(dedupProduct.images.every((image: any) => image.storedName === 'DEDUP-NEW/主图/DEDUP-NEW-主图-01.png'), 'common reference should own the rule filename');
+  const dedupMainDir = path.join(dataDir, 'uploads', 'DEDUP-NEW', '主图');
+  assert(fs.readdirSync(dedupMainDir).length === 1, 'platform duplicate file remained after saving');
+
+  // A batch that reuses a shared file then fails validation must leave it intact.
+  const failedBatch = await uploadFor(dedupId, 'tmall', 'main', [legacyPng, Buffer.from('not a png')]);
+  assert(failedBatch.status === 415, 'dedup must not bypass validation');
+  assert((await readProduct(dedupId)).images.length === 2 && fs.readdirSync(dedupMainDir).length === 1, 'failed upload removed shared storage or retained usage records');
+  const differentBytes = Buffer.concat([legacyPng, Buffer.from('different content')]);
+  assert((await uploadFor(dedupId, 'amazon', 'main', [differentBytes], 'same.png')).ok, 'different image with same filename should upload');
+  assert((await uploadFor(dedupId, 'tmall', 'main', [legacyPng, legacyPng])).ok, 'duplicates within one batch should share storage');
+  assert((await saveProduct(dedupId, 'DEDUP-NEW')).ok, 'saving distinct and duplicate materials failed');
+  dedupProduct = await readProduct(dedupId);
+  assert(dedupProduct.images.length === 5 && fs.readdirSync(dedupMainDir).length === 2, 'usage rows must remain independent while identical bytes share files');
+  assert(fs.existsSync(path.join(dedupMainDir, 'DEDUP-NEW-亚马逊-主图-01.png')), 'different platform content must retain its own rule filename');
+  const commonDedupImage = dedupProduct.images.find((image: any) => image.scope === 'common');
+  const amazonDedupImage = dedupProduct.images.find((image: any) => image.scope === 'amazon' && image.storedName === commonDedupImage.storedName);
+  assert((await fetch(`${base}/api/images/${commonDedupImage.id}`, { method: 'DELETE' })).ok, 'deleting shared common usage failed');
+  assert((await readBytes(amazonDedupImage)).equals(legacyPng), 'deleting shared common usage removed platform image');
+  assert((await saveProduct(dedupId, 'DEDUP-NEW')).ok, 'platform-only reference should remain savable');
+  await fetch(`${base}/api/products/${dedupId}`, { method: 'DELETE' });
+  assert(!fs.existsSync(path.dirname(dedupMainDir)), 'deleting all usages should clean shared and separate files');
+
+  // Existing duplicates merge on Save; a persistence failure restores each original separately.
+  const duplicateLegacyBefore = await readProduct(2);
+  const legacyDatabaseBackup = path.join(dataDir, 'dedup-database-backup.sqlite');
+  fs.renameSync(databasePath, legacyDatabaseBackup); fs.mkdirSync(databasePath);
+  try {
+    assert(!(await saveProduct(2, 'DEDUP-LEGACY')).ok, 'merge must reject failed persistence');
+    const afterFailedMerge = await readProduct(2);
+    assert(afterFailedMerge.images.every((image: any) => image.storedName === duplicateLegacyBefore.images.find((original: any) => original.id === image.id).storedName), 'failed merge lost original references');
+    for (const image of afterFailedMerge.images) assert((await readBytes(image)).equals(legacyPng), 'failed merge lost duplicate source files');
+    assert(!fs.existsSync(path.join(dataDir, 'uploads', 'DEDUP-LEGACY')), 'failed merge retained target directory');
+  } finally { fs.rmdirSync(databasePath); fs.renameSync(legacyDatabaseBackup, databasePath); }
+  assert((await saveProduct(2, 'DEDUP-LEGACY')).ok, 'legacy duplicate merge failed');
+  let mergedLegacy = await readProduct(2);
+  const mergedMains = mergedLegacy.images.filter((image: any) => image.kind === 'main');
+  assert(mergedMains.length === 3 && mergedMains.every((image: any) => image.storedName === 'DEDUP-LEGACY/主图/DEDUP-LEGACY-主图-01.png'), 'legacy platform and common duplicates should use the common filename');
+  assert(fs.readdirSync(path.join(dataDir, 'uploads', 'DEDUP-LEGACY', '主图')).length === 1, 'legacy duplicate physical files remain');
+  assert(mergedLegacy.images.find((image: any) => image.kind === 'detail').storedName === 'DEDUP-LEGACY/详情图/DEDUP-LEGACY-详情图-01.png', 'main and detail classifications must remain separate');
+  for (const filename of ['duplicate-common.png', 'duplicate-amazon.png', 'duplicate-tmall.png', 'duplicate-detail.png']) assert(!fs.existsSync(path.join(dataDir, 'uploads', filename)), 'legacy duplicate source was not removed after success');
+  assert((await saveProduct(2, 'DEDUP-LEGACY')).ok, 'repeated saves should keep the same shared file');
+  await stopApp(); startApp(true); await waitForServer();
+  mergedLegacy = await readProduct(2);
+  for (const image of mergedLegacy.images) assert((await readBytes(image)).equals(legacyPng), 'merged file did not survive restart');
+  await fetch(`${base}/api/products/2`, { method: 'DELETE' });
+  assert(!fs.existsSync(path.join(dataDir, 'uploads', 'DEDUP-LEGACY')), 'merged legacy product files were not cleaned');
+  assert(!fs.readdirSync(path.join(dataDir, 'uploads')).some((name) => name.startsWith('.__listingview_rename_')), 'dedup left staged duplicate files');
+
+  // Legacy flat files remain readable until saving, then move into the new layout.
+  assert((await saveProduct(migratedLegacy.id, migratedLegacy.sku)).ok, 'legacy flat-file migration on save failed');
+  const savedLegacy = await readProduct(migratedLegacy.id);
+  assert(savedLegacy.images[0].storedName === 'LEGACY-001/详情图/LEGACY-001-亚马逊-详情图-01.png', 'legacy image was not classified');
+  assert((await readBytes(savedLegacy.images[0])).equals(legacyPng) && !fs.existsSync(path.join(dataDir, 'uploads', 'legacy.png')), 'legacy image content not preserved');
+
+  await stopApp(); startApp(true); await waitForServer();
+  savedProduct = await readProduct(created.product.id);
+  for (const image of savedProduct.images) assert((await readBytes(image)).equals(originalBytes.get(image.id)!), 'nested path did not survive restart');
+  const commonMainId = uploaded.product.images.find((image: any) => image.scope === 'common' && image.kind === 'main').id;
+  visionProviderMode = 'success';
+  const nestedRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageIds: [commonMainId] }),
+  });
+  assert(nestedRecognition.ok, 'recognition cannot read the nested image path');
+  const commonMain = savedProduct.images.find((image: any) => image.id === commonMainId);
+  assert((await fetch(`${base}/api/images/${commonMainId}`, { method: 'DELETE' })).ok, 'deleting common reference failed');
+  assert((await readBytes(commonMain)).equals(originalBytes.get(commonMainId)!), 'deleting one shared reference removed the file');
   await fetch(`${base}/api/products/${created.product.id}`, { method: 'DELETE' });
-  console.log('API integration test passed: legacy database migration, file preservation, CRUD, image fallback, device-specific upload and preview, isolated sorting, vision configuration, image ownership, recognition, malformed provider response and delete');
+  assert(!fs.existsSync(path.join(dataDir, 'uploads', 'sku-renamed')), 'final reference deletion should remove SKU directory');
+  assert(!fs.readdirSync(path.join(dataDir, 'uploads')).some((name) => name.startsWith('.__listingview_rename_')), 'save left staged files');
+  // Verify public preview + download vs password-protected editing when ADMIN_PASSWORD is set.
+  await stopApp();
+  startApp(true, 'secret-admin-pass');
+  await waitForServer();
+  const visitorAuth = await fetch(`${base}/api/auth/status`).then((r) => r.json()) as { authenticated: boolean; passwordRequired: boolean };
+  assert(!visitorAuth.authenticated && visitorAuth.passwordRequired, 'visitor should not be authenticated when ADMIN_PASSWORD is set');
+  const visitorList = await fetch(`${base}/api/products`).then((r) => r.json()) as { products: any[] };
+  assert(visitorList.products.some((p: any) => p.id === migratedLegacy.id), 'visitor should still be able to view products');
+  const visitorDetail = await fetch(`${base}/api/products/${migratedLegacy.id}`);
+  assert(visitorDetail.ok, 'visitor should be able to view product detail');
+  const visitorExport = await fetch(`${base}/api/products/${migratedLegacy.id}/export?platform=amazon`);
+  assert(visitorExport.ok && (await visitorExport.arrayBuffer()).byteLength > 0, 'visitor should be able to download platform images');
+  assert((await fetch(`${base}/api/products`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Blocked', sku: 'BLOCKED-1', platforms: { amazon: {}, tmall: {} } }) })).status === 401, 'visitor create must be rejected with 401');
+  assert((await fetch(`${base}/api/products/${migratedLegacy.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Blocked', sku: migratedLegacy.sku, platforms: { amazon: {}, tmall: {} } }) })).status === 401, 'visitor update must be rejected with 401');
+  assert((await fetch(`${base}/api/products/${migratedLegacy.id}`, { method: 'DELETE' })).status === 401, 'visitor delete must be rejected with 401');
+  assert((await fetch(`${base}/api/vision/status`)).status === 401, 'visitor vision status must be rejected with 401');
+  assert((await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'wrong-password' }) })).status === 401, 'wrong admin password must return 401');
+  const loginRes = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'secret-admin-pass' }) });
+  assert(loginRes.ok, 'correct admin password should succeed');
+  const loginBody = await loginRes.json() as { status: { authenticated: boolean; passwordRequired: boolean }; token: string };
+  assert(loginBody.status.authenticated && loginBody.token, 'login must return authenticated status and token');
+  const authedStatus = await fetch(`${base}/api/auth/status`, { headers: { Authorization: `Bearer ${loginBody.token}` } }).then((r) => r.json()) as { authenticated: boolean };
+  assert(authedStatus.authenticated, 'valid token should authenticate status check');
+  const authedUpdate = await fetch(`${base}/api/products/${migratedLegacy.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
+    body: JSON.stringify({ name: 'Authed Legacy Product', sku: migratedLegacy.sku, genericTitle: 'Legacy title', genericPrice: 20, platforms: { amazon: { title: '', price: null }, tmall: { title: '', price: null } } }),
+  });
+  assert(authedUpdate.ok, 'authenticated admin should be able to save product');
+
+  console.log('API integration test passed: legacy migration, CRUD, platform/device fallback, grid order, vision, SKU/kind directories, rule naming, shared files, content deduplication, legacy duplicate merge and rollback, filename swaps, collision protection, rollback, SKU changes, restart and deletion');
+
 } finally {
   await stopApp();
   await new Promise<void>((resolve) => visionProvider.close(() => resolve()));

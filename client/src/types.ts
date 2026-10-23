@@ -4,6 +4,11 @@ export type Device = 'desktop' | 'mobile';
 export type ImageKind = 'main' | 'detail';
 export type ImageScope = Platform | 'common';
 
+export interface AuthStatus {
+  authenticated: boolean;
+  passwordRequired: boolean;
+}
+
 export interface ProductImage {
   id: number;
   productId: number;

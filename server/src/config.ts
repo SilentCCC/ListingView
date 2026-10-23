@@ -21,3 +21,4 @@ export const sqlWasmDir = path.join(serverRoot, 'node_modules', 'sql.js', 'dist'
 export const visionApiBaseUrl = process.env.VISION_API_BASE_URL?.trim() || '';
 export const visionApiKey = process.env.VISION_API_KEY?.trim() || '';
 export const visionModel = process.env.VISION_MODEL?.trim() || '';
+export const adminPassword = process.env.ADMIN_PASSWORD?.trim() || '';

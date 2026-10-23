@@ -8,7 +8,7 @@ import routes from './routes.js';
 
 await initDatabase();
 const app = express();
-app.use(cors({ origin: corsOrigin === '*' ? true : corsOrigin }));
+app.use(cors({ origin: corsOrigin === '*' ? true : corsOrigin, exposedHeaders: ['Content-Disposition'] }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/uploads', express.static(uploadsDir, { maxAge: nodeEnv === 'production' ? '7d' : 0, index: false }));
 app.use('/api', routes);
@@ -20,7 +20,8 @@ if (fs.existsSync(clientDistDir)) {
     response.sendFile(path.join(clientDistDir, 'index.html'));
   });
 }
-app.use((error: any, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
+app.use((error: any, _request: express.Request, response: express.Response, next: express.NextFunction) => {
+  if (response.headersSent) { next(error); return; }
   const status = Number(error?.status) || (error?.code === 'LIMIT_FILE_SIZE' ? 413 : error?.code === 'LIMIT_UNEXPECTED_FILE' ? 400 : 500);
   const message = error?.code === 'LIMIT_FILE_SIZE' ? '图片大小超过限制' : error?.message || '服务器内部错误';
   if (status >= 500) console.error(error);

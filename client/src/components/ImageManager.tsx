@@ -36,6 +36,7 @@ interface ImageManagerProps {
 
 export function ImageManager({ product, scope, kind, device = 'all', gridMode = false, onUpload, onImportCommon, onDelete, onReorder, onPreview }: ImageManagerProps) {
   const [overviewOpen, setOverviewOpen] = useState(false);
+  const [activeInsertRow, setActiveInsertRow] = useState<number | null>(null);
   const images = product.images
     .filter((image) => image.scope === scope && image.kind === kind && image.device === device)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
@@ -54,6 +55,7 @@ export function ImageManager({ product, scope, kind, device = 'all', gridMode = 
   const dragImage = (event: DragEvent<HTMLElement>, image: ProductImage) => {
     event.dataTransfer.setData('text/plain', String(image.id));
     event.dataTransfer.effectAllowed = 'move';
+    setActiveInsertRow(null);
   };
 
   const dropImage = async (event: DragEvent<HTMLElement>, target: ProductImage) => {
@@ -102,7 +104,12 @@ export function ImageManager({ product, scope, kind, device = 'all', gridMode = 
     if (!movedImage) return;
 
     if (createNewRow) {
-      const insertAt = Math.max(0, Math.min(targetRowIndex, currentRows.length));
+      // A source row that becomes empty collapses. Adjust the requested gap
+      // when that row was above it so the image lands between the intended rows.
+      const sourceRowCollapsed = currentRows[sourceRowIndex].length === 0;
+      if (sourceRowCollapsed) currentRows.splice(sourceRowIndex, 1);
+      const adjustedTargetRow = targetRowIndex - (sourceRowCollapsed && sourceRowIndex < targetRowIndex ? 1 : 0);
+      const insertAt = Math.max(0, Math.min(adjustedTargetRow, currentRows.length));
       currentRows.splice(insertAt, 0, [movedImage]);
       await commitGridRows(currentRows);
       return;
@@ -223,90 +230,126 @@ export function ImageManager({ product, scope, kind, device = 'all', gridMode = 
         <div className="image-dropzone image-dropzone--grid" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
           {rows.length ? (
             <div className="detail-grid-rows">
+              <div
+                className={`detail-grid-insert-row ${activeInsertRow === 0 ? 'is-drag-over' : ''}`}
+                title="拖到这里，在最前面插入新行"
+                onDragEnter={() => setActiveInsertRow(0)}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.dataTransfer.dropEffect = 'move';
+                  setActiveInsertRow(0);
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActiveInsertRow(null);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setActiveInsertRow(null);
+                  const sourceId = Number(event.dataTransfer.getData('text/plain'));
+                  if (sourceId) void moveToGridPosition(sourceId, 0, 0, true);
+                }}
+              >
+                <Plus size={12} /> 在最前面插入新行
+              </div>
               {rows.map((row, rowIndex) => (
-                <div className="detail-grid-row" key={`row-${rowIndex}`}>
-                  <div className="detail-grid-row__header">
-                    <strong>第 {rowIndex + 1} 行</strong>
-                    <span>{row.length > 1 ? `横滑组（${row.length}/3 张，预览可左右滑动）` : '单张展示（拖入右侧空位可组成横滑）'}</span>
-                  </div>
-                  <div className="detail-grid-slots">
-                    {[0, 1, 2].map((colIndex) => {
-                      const image = row[colIndex];
-                      if (image) {
-                        const canUp = rowIndex > 0 || row.length > 1;
-                        const canDown = rowIndex < rows.length - 1 || row.length > 1;
+                <div className="detail-grid-row-wrap" key={`row-${rowIndex}`}>
+                  <div className="detail-grid-row">
+                    <div className="detail-grid-row__header">
+                      <strong>第 {rowIndex + 1} 行</strong>
+                      <span>{row.length > 1 ? `横滑组（${row.length}/3 张，预览可左右滑动）` : '单张展示（拖入右侧空位可组成横滑）'}</span>
+                    </div>
+                    <div className="detail-grid-slots">
+                      {[0, 1, 2].map((colIndex) => {
+                        const image = row[colIndex];
+                        if (image) {
+                          const canUp = rowIndex > 0 || row.length > 1;
+                          const canDown = rowIndex < rows.length - 1 || row.length > 1;
+                          return (
+                            <div
+                              key={image.id}
+                              className="image-tile image-tile--grid"
+                              draggable
+                              onDragStart={(event) => dragImage(event, image)}
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const sourceId = Number(event.dataTransfer.getData('text/plain'));
+                                if (sourceId && sourceId !== image.id) {
+                                  void moveToGridPosition(sourceId, rowIndex, colIndex, false);
+                                }
+                              }}
+                              onClick={() => onPreview(image)}
+                            >
+                              <img src={imageUrl(image)} alt={image.originalName} loading="lazy" />
+                              <span className="image-tile__order">{rowIndex + 1}-{colIndex + 1}</span>
+                              <span className="image-tile__drag" title="拖拽可移动到任意行/列"><GripVertical size={14} /></span>
+                              <div className="image-tile__arrows" onClick={(event) => event.stopPropagation()}>
+                                <button type="button" title="上移一行" disabled={!canUp} onClick={() => void stepMove(rowIndex, colIndex, 'up')}><ArrowUp size={11} /></button>
+                                <button type="button" title="下移一行" disabled={!canDown} onClick={() => void stepMove(rowIndex, colIndex, 'down')}><ArrowDown size={11} /></button>
+                                <button type="button" title="左移一格" disabled={colIndex === 0} onClick={() => void stepMove(rowIndex, colIndex, 'left')}><ArrowLeft size={11} /></button>
+                                <button type="button" title="右移一格" disabled={colIndex >= row.length - 1} onClick={() => void stepMove(rowIndex, colIndex, 'right')}><ArrowRight size={11} /></button>
+                              </div>
+                              <button
+                                type="button"
+                                className="image-tile__delete"
+                                title="删除图片"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void onDelete(image);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          );
+                        }
                         return (
                           <div
-                            key={image.id}
-                            className="image-tile image-tile--grid"
-                            draggable
-                            onDragStart={(event) => dragImage(event, image)}
+                            key={`empty-${rowIndex}-${colIndex}`}
+                            className="detail-grid-slot--empty"
                             onDragOver={(event) => event.preventDefault()}
                             onDrop={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
                               const sourceId = Number(event.dataTransfer.getData('text/plain'));
-                              if (sourceId && sourceId !== image.id) {
-                                void moveToGridPosition(sourceId, rowIndex, colIndex, false);
-                              }
+                              if (sourceId) void moveToGridPosition(sourceId, rowIndex, colIndex, false);
                             }}
-                            onClick={() => onPreview(image)}
                           >
-                            <img src={imageUrl(image)} alt={image.originalName} loading="lazy" />
-                            <span className="image-tile__order">{rowIndex + 1}-{colIndex + 1}</span>
-                            <span className="image-tile__drag" title="拖拽可移动到任意行/列"><GripVertical size={14} /></span>
-                            <div className="image-tile__arrows" onClick={(event) => event.stopPropagation()}>
-                              <button type="button" title="上移一行" disabled={!canUp} onClick={() => void stepMove(rowIndex, colIndex, 'up')}><ArrowUp size={11} /></button>
-                              <button type="button" title="下移一行" disabled={!canDown} onClick={() => void stepMove(rowIndex, colIndex, 'down')}><ArrowDown size={11} /></button>
-                              <button type="button" title="左移一格" disabled={colIndex === 0} onClick={() => void stepMove(rowIndex, colIndex, 'left')}><ArrowLeft size={11} /></button>
-                              <button type="button" title="右移一格" disabled={colIndex >= row.length - 1} onClick={() => void stepMove(rowIndex, colIndex, 'right')}><ArrowRight size={11} /></button>
-                            </div>
-                            <button
-                              type="button"
-                              className="image-tile__delete"
-                              title="删除图片"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void onDelete(image);
-                              }}
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                            <Plus size={14} />
+                            <span>拖入第 {colIndex + 1} 列</span>
                           </div>
                         );
-                      }
-                      return (
-                        <div
-                          key={`empty-${rowIndex}-${colIndex}`}
-                          className="detail-grid-slot--empty"
-                          onDragOver={(event) => event.preventDefault()}
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            const sourceId = Number(event.dataTransfer.getData('text/plain'));
-                            if (sourceId) void moveToGridPosition(sourceId, rowIndex, colIndex, false);
-                          }}
-                        >
-                          <Plus size={14} />
-                          <span>拖入第 {colIndex + 1} 列</span>
-                        </div>
-                      );
-                    })}
+                      })}
+                    </div>
+                  </div>
+                  <div
+                    className={`detail-grid-insert-row ${activeInsertRow === rowIndex + 1 ? 'is-drag-over' : ''}`}
+                    title={`拖到这里，在第 ${rowIndex + 1} 行之后插入新行`}
+                    onDragEnter={() => setActiveInsertRow(rowIndex + 1)}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      event.dataTransfer.dropEffect = 'move';
+                      setActiveInsertRow(rowIndex + 1);
+                    }}
+                    onDragLeave={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActiveInsertRow(null);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setActiveInsertRow(null);
+                      const sourceId = Number(event.dataTransfer.getData('text/plain'));
+                      if (sourceId) void moveToGridPosition(sourceId, rowIndex + 1, 0, true);
+                    }}
+                  >
+                    <Plus size={12} /> 在此处插入新行
                   </div>
                 </div>
               ))}
-              <div
-                className="detail-grid-new-row"
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  const sourceId = Number(event.dataTransfer.getData('text/plain'));
-                  if (sourceId) void moveToGridPosition(sourceId, rows.length, 0, true);
-                }}
-              >
-                <Plus size={14} /> 拖动图片到此处单独新建一行
-              </div>
             </div>
           ) : (
             <div className="empty-upload"><ImagePlus size={20} /><span>拖拽图片到这里，或点击右上角导入 / 上传</span></div>

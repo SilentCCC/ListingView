@@ -1,15 +1,86 @@
-import type { Product, ProductImage, ImageDevice, ImageKind, ImageScope, RecognitionResult, VisionConfigInput, VisionStatus } from './types';
+import type { AuthStatus, Product, ProductImage, ImageDevice, ImageKind, ImageScope, Platform, RecognitionResult, VisionConfigInput, VisionStatus } from './types';
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '';
+const ADMIN_TOKEN_STORAGE_KEY = 'listingview_admin_token';
+
+function getStoredAdminToken(): string {
+  try {
+    return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
+      || window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
+      || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setStoredAdminToken(token: string) {
+  try {
+    if (token) {
+      window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+      window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+    } else {
+      window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+      window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage quota / privacy mode errors
+  }
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, options);
+  const token = getStoredAdminToken();
+  const headers = new Headers(options?.headers || undefined);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(`${apiBase}${path}`, {
+    ...options,
+    headers,
+  });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
+  if (!response.ok) {
+    const error = new Error(data.error || `请求失败（${response.status}）`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
   return data as T;
 }
 
 export const api = {
+  getAuthStatus: () => request<AuthStatus>('/api/auth/status'),
+  loginAdmin: async (password: string) => {
+    const result = await request<{ status: AuthStatus; token: string }>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (result.token) setStoredAdminToken(result.token);
+    return result.status;
+  },
+  logoutAdmin: async () => {
+    setStoredAdminToken('');
+    const result = await request<{ status: AuthStatus }>('/api/auth/logout', { method: 'POST' });
+    return result.status;
+  },
+  downloadPlatformImages: async (product: Product, platform: Platform) => {
+    const response = await fetch(`${apiBase}/api/products/${product.id}/export?platform=${platform}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || '图片打包失败，请稍后重试');
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    link.download = encodedName ? decodeURIComponent(encodedName) : product.sku.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-') + '-' + (platform === 'amazon' ? '亚马逊' : '天猫') + '.zip';
+    link.href = objectUrl;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Allow the browser to take ownership before releasing the object URL.
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  },
   listProducts: (search = '') => request<{ products: Product[] }>(`/api/products${search ? `?search=${encodeURIComponent(search)}` : ''}`),
   getVisionStatus: () => request<VisionStatus>('/api/vision/status'),
   saveVisionConfig: (payload: VisionConfigInput) => request<VisionStatus>('/api/vision/config', {

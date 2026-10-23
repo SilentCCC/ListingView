@@ -1,13 +1,17 @@
 import { Router } from 'express';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import path from 'node:path';
 import { db } from './db.js';
 import { asyncRoute, httpError } from './http.js';
-import { cloneStoredFile, removeStoredFile, resolveStoredFilePath, saveUploadedFile } from './storage.js';
+import { ensureStoredFileDirectory, pruneStoredFileDirectories, removeStoredFile, resolveStoredFilePath, saveUploadedFile, validateUploadedFile } from './storage.js';
 import { getVisionSettingsStatus, recognizeProductImages } from './vision.js';
 import { clearSavedVisionConfig, saveVisionConfig } from './vision-config.js';
 import type { Device, ImageDevice, ImageKind, ImageScope, Platform, Product, ProductImage } from './types.js';
 import { maxFileSizeBytes } from './config.js';
 import multer from 'multer';
+import { platformImageEntries, streamImageZip } from './image-export.js';
+import { getAuthStatus, loginAdmin, requireAdmin } from './auth.js';
 
 const router = Router();
 const upload = multer({
@@ -38,7 +42,12 @@ function normalizeProduct(row: any): Product {
       created_at AS createdAt, stored_name AS storedName
     FROM images WHERE product_id = ? ORDER BY scope, kind, device, sort_order, row_order, col_order, id
   `).all(row.id) as Array<ProductImage & { storedName: string }>;
-  const normalizedImages = images.map((image) => ({ ...image, url: `/uploads/${encodeURIComponent(image.storedName)}` }));
+  // One cache identity per physical file, including all shared platform references.
+  // Reordered filenames can hold different images after saving; versioned URLs
+  // prevent production browser caches from displaying the previous file.
+  const fileVersions = new Map<string, number>();
+  for (const image of images) fileVersions.set(image.storedName, Math.min(fileVersions.get(image.storedName) ?? image.id, image.id));
+  const normalizedImages = images.map((image) => ({ ...image, url: `/uploads/${image.storedName.split('/').map(encodeURIComponent).join('/')}?v=${fileVersions.get(image.storedName)}` }));
   const effectiveImages = {
     amazon: buildEffectiveImages(normalizedImages, 'amazon'),
     tmall: buildEffectiveImages(normalizedImages, 'tmall'),
@@ -105,19 +114,234 @@ function parseId(value: string | string[]): number {
   return id;
 }
 
-router.get('/vision/status', (_request, response) => {
+type ImageFileRow = {
+  id: number;
+  scope: ImageScope;
+  kind: ImageKind;
+  device: ImageDevice;
+  storedName: string;
+  originalName: string;
+  sortOrder: number;
+  rowOrder: number;
+  colOrder: number;
+};
+
+type ImageRenamePlan = {
+  oldName: string;
+  newName: string;
+};
+
+function contentHash(buffer: Buffer): string {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function imageOrder(a: ImageFileRow, b: ImageFileRow): number {
+  return a.sortOrder - b.sortOrder || a.rowOrder - b.rowOrder || a.colOrder - b.colOrder || a.id - b.id;
+}
+
+function safeFilePart(value: string): string {
+  let cleaned = value.normalize('NFC')
+    .replace(/[\\/:*?"<>|\0-\x1f]/g, '-')
+    .trim()
+    .replace(/[. ]+$/g, '');
+  if (!cleaned || cleaned === '.' || cleaned === '..') throw httpError(400, '商品编号不能用于生成图片目录');
+  // Avoid dot-directories, which the static image server deliberately hides.
+  if (cleaned.startsWith('.')) cleaned = `_${cleaned}`;
+  // Windows device names are reserved even when followed by an extension.
+  if (/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(cleaned)) cleaned = `_${cleaned}`;
+  if (Buffer.byteLength(cleaned, 'utf8') > 160) throw httpError(400, '商品编号过长，不能用于生成图片目录');
+  return cleaned;
+}
+
+function productImageDirectory(productId: number, sku: string, kind: ImageKind): string {
+  const folder = safeFilePart(sku);
+  const products = db.prepare('SELECT id, sku FROM products WHERE id <> ?').all(productId) as Array<{ id: number; sku: string }>;
+  for (const product of products) {
+    let otherFolder: string;
+    try { otherFolder = safeFilePart(product.sku); } catch { continue; }
+    if (otherFolder.toLowerCase() === folder.toLowerCase()) {
+      throw httpError(409, '商品编号生成的图片目录与其他商品重复，请使用不同编号（不区分大小写）');
+    }
+  }
+  return path.posix.join(folder, kind === 'main' ? '主图' : '详情图');
+}
+
+function imageCategory(image: ImageFileRow): string {
+  if (image.scope === 'common') return image.kind === 'main' ? '主图' : '详情图';
+  const platform = image.scope === 'amazon' ? '亚马逊' : '天猫';
+  if (image.kind === 'detail' && image.device !== 'all') return `${platform}-${image.device === 'desktop' ? '电脑' : '手机'}-详情图`;
+  return `${platform}-${image.kind === 'main' ? '主图' : '详情图'}`;
+}
+
+function buildImageRenamePlan(productId: number, sku: string): ImageRenamePlan[] {
+  const images = db.prepare(`
+    SELECT id, scope, kind, device, stored_name AS storedName, original_name AS originalName,
+      sort_order AS sortOrder, row_order AS rowOrder, col_order AS colOrder
+    FROM images WHERE product_id = ?
+    ORDER BY sort_order, row_order, col_order, id
+  `).all(productId) as ImageFileRow[];
+  // Only merge byte-identical files within the same product and image kind.
+  // Keep every usage record, so each platform retains its own order and layout.
+  const hashByFile = new Map<string, string>();
+  const groups = new Map<string, ImageFileRow[]>();
+  for (const image of images) {
+    let hash = hashByFile.get(image.storedName);
+    if (!hash) {
+      const source = resolveStoredFilePath(image.storedName);
+      if (!fs.statSync(source, { throwIfNoEntry: false })?.isFile()) throw httpError(404, `图片文件不存在：${image.storedName}`);
+      hash = contentHash(fs.readFileSync(source));
+      hashByFile.set(image.storedName, hash);
+    }
+    const key = `${image.kind}:${hash}`;
+    groups.set(key, [...(groups.get(key) || []), image]);
+  }
+
+  const categoryGroups = new Map<string, Array<{ storedNames: string[]; first: ImageFileRow }>>();
+  for (const group of groups.values()) {
+    const representative = [...group].sort((a, b) => {
+      const scopeWeight = (item: ImageFileRow) => item.scope === 'common' ? 0 : 1;
+      return scopeWeight(a) - scopeWeight(b) || imageOrder(a, b);
+    })[0];
+    const category = imageCategory(representative);
+    const list = categoryGroups.get(category) || [];
+    const storedNames = [...new Set([representative.storedName, ...group.map((image) => image.storedName)])];
+    list.push({ storedNames, first: representative });
+    categoryGroups.set(category, list);
+  }
+
+  const productPart = safeFilePart(sku);
+  const plan: ImageRenamePlan[] = [];
+  for (const [category, categoryItems] of categoryGroups) {
+    categoryItems.sort((a, b) => imageOrder(a.first, b.first));
+    categoryItems.forEach((item, index) => {
+      const extension = path.extname(item.first.storedName).toLowerCase() || path.extname(item.first.originalName).toLowerCase() || '.jpg';
+      const directory = productImageDirectory(productId, sku, item.first.kind);
+      const newName = path.posix.join(directory, `${productPart}-${category}-${String(index + 1).padStart(2, '0')}${extension}`);
+      // Include the canonical source when merging, even if it already has its final name.
+      if (item.storedNames.length > 1 || item.storedNames[0] !== newName) {
+        for (const oldName of item.storedNames) plan.push({ oldName, newName });
+      }
+    });
+  }
+  return plan;
+}
+
+function renameProductImages(productId: number, sku: string, updateProduct: () => void, restoreProduct: () => void): void {
+  const plan = buildImageRenamePlan(productId, sku);
+  const originalReferences = db.prepare('SELECT id, stored_name AS storedName FROM images WHERE product_id = ?').all(productId) as Array<{ id: number; storedName: string }>;
+
+  const currentNames = new Set((db.prepare('SELECT DISTINCT stored_name AS storedName FROM images WHERE product_id = ?').all(productId) as Array<{ storedName: string }>).map((row) => row.storedName));
+  const externalNames = new Set((db.prepare('SELECT DISTINCT stored_name AS storedName FROM images WHERE product_id <> ?').all(productId) as Array<{ storedName: string }>).map((row) => row.storedName.toLowerCase()));
+  const targetNames = new Set<string>();
+  for (const item of plan) {
+    const key = item.newName.toLowerCase();
+    // Repeated exact targets represent identical files that are being merged.
+    if (targetNames.has(key)) {
+      if (plan.some((other) => other.newName.toLowerCase() === key && other.newName !== item.newName)) throw httpError(409, '图片命名冲突，请检查商品编号');
+      continue;
+    }
+    if (externalNames.has(key)) throw httpError(409, `图片文件名已存在：${item.newName}`);
+    const destination = resolveStoredFilePath(item.newName);
+    if (!currentNames.has(item.newName) && fs.existsSync(destination)) {
+      // Windows resolves case-only changes to the same file. On Linux, a separate
+      // file with different casing must still never be overwritten.
+      const existing = fs.statSync(destination);
+      const sourceName = [...currentNames].find((name) => name.toLowerCase() === key);
+      const source = sourceName ? fs.statSync(resolveStoredFilePath(sourceName), { throwIfNoEntry: false }) : undefined;
+      if (!source || source.dev !== existing.dev || source.ino !== existing.ino) throw httpError(409, `图片文件名已存在：${item.newName}`);
+    }
+    targetNames.add(key);
+  }
+
+  const moves: Array<{ oldName: string; newName: string; tempName: string; finalized: boolean }> = [];
+  let referencesUpdated = false;
+  try {
+    for (const item of plan) {
+      const sourcePath = resolveStoredFilePath(item.oldName);
+      if (!fs.statSync(sourcePath, { throwIfNoEntry: false })?.isFile()) throw httpError(404, `图片文件不存在：${item.oldName}`);
+      const tempName = `.__listingview_rename_${crypto.randomUUID()}${path.extname(item.oldName).toLowerCase() || '.tmp'}`;
+      fs.renameSync(sourcePath, resolveStoredFilePath(tempName));
+      moves.push({ ...item, tempName, finalized: false });
+    }
+    for (const move of moves) pruneStoredFileDirectories(move.oldName);
+    const finalizedNames = new Set<string>();
+    for (const move of moves) {
+      if (finalizedNames.has(move.newName)) continue;
+      ensureStoredFileDirectory(move.newName);
+      fs.renameSync(resolveStoredFilePath(move.tempName), resolveStoredFilePath(move.newName));
+      move.finalized = true;
+      finalizedNames.add(move.newName);
+    }
+    db.transaction(() => {
+      // Two passes also protect database references when filenames swap after sorting.
+      for (const move of moves) db.prepare('UPDATE images SET stored_name = ? WHERE product_id = ? AND stored_name = ?').run(move.tempName, productId, move.oldName);
+      for (const move of moves) db.prepare('UPDATE images SET stored_name = ? WHERE product_id = ? AND stored_name = ?').run(move.newName, productId, move.tempName);
+      updateProduct();
+    })();
+    referencesUpdated = true;
+    db.persist();
+    for (const move of moves) pruneStoredFileDirectories(move.oldName);
+  } catch (error) {
+    if (referencesUpdated) {
+      db.transaction(() => {
+        for (const image of originalReferences) db.prepare('UPDATE images SET stored_name = ? WHERE id = ? AND product_id = ?').run(image.storedName, image.id, productId);
+        restoreProduct();
+      })();
+    }
+    // Stage finalized targets again before restoration, including filename swaps.
+    for (const move of moves.filter((item) => item.finalized)) {
+      try { fs.renameSync(resolveStoredFilePath(move.newName), resolveStoredFilePath(move.tempName)); }
+      catch (restoreError) { console.error('图片文件回滚失败', restoreError); }
+    }
+    for (const move of [...moves].reverse()) {
+      try {
+        const currentPath = resolveStoredFilePath(move.tempName);
+        ensureStoredFileDirectory(move.oldName);
+        if (fs.statSync(currentPath, { throwIfNoEntry: false })?.isFile()) fs.renameSync(currentPath, resolveStoredFilePath(move.oldName));
+        pruneStoredFileDirectories(move.newName);
+      } catch (restoreError) { console.error('图片文件回滚失败', restoreError); }
+    }
+    throw error;
+  }
+  // Duplicate originals remain staged until the new references are safely persisted.
+  // Cleanup errors must not roll back an already committed save.
+  for (const move of moves.filter((item) => !item.finalized)) {
+    try { removeStoredFile(move.tempName); }
+    catch (error) { console.error('重复图片临时文件清理失败', error); }
+  }
+}
+
+function removeStoredFileIfUnreferenced(storedName: string): void {
+  const reference = db.prepare('SELECT id FROM images WHERE stored_name = ? LIMIT 1').get(storedName);
+  if (!reference) removeStoredFile(storedName);
+}
+
+router.get('/auth/status', (request, response) => {
+  response.json(getAuthStatus(request));
+});
+
+router.post('/auth/login', (request, response) => {
+  response.json(loginAdmin(request, request.body?.password));
+});
+
+router.post('/auth/logout', (request, response) => {
+  const current = getAuthStatus(request);
+  response.json({ status: { authenticated: !current.passwordRequired, passwordRequired: current.passwordRequired } });
+});
+
+router.get('/vision/status', requireAdmin, (_request, response) => {
   response.json(getVisionSettingsStatus());
 });
 
-router.put('/vision/config', (request, response) => {
+router.put('/vision/config', requireAdmin, (request, response) => {
   response.json(saveVisionConfig(request.body));
 });
 
-router.delete('/vision/config', (_request, response) => {
+router.delete('/vision/config', requireAdmin, (_request, response) => {
   response.json(clearSavedVisionConfig());
 });
 
-router.post('/products/:id/recognize', asyncRoute(async (request, response) => {
+router.post('/products/:id/recognize', requireAdmin, asyncRoute(async (request, response) => {
   const productId = parseId(request.params.id);
   requireProduct(productId);
   const imageIds: unknown = request.body?.imageIds;
@@ -158,9 +382,19 @@ router.get('/products/:id', (request, response) => {
   response.json({ product: normalizeProduct(requireProduct(parseId(request.params.id))) });
 });
 
-router.post('/products', (request, response) => {
+router.get('/products/:id/export', asyncRoute(async (request, response) => {
+  const platform = request.query.platform;
+  if (platform !== 'amazon' && platform !== 'tmall') throw httpError(400, '请选择亚马逊或天猫平台');
+  const product = normalizeProduct(requireProduct(parseId(request.params.id)));
+  const sku = safeFilePart(product.sku);
+  const entries = platformImageEntries(product, platform, sku);
+  await streamImageZip(response, entries, sku + '-' + (platform === 'amazon' ? '亚马逊' : '天猫') + '.zip');
+}));
+
+router.post('/products', requireAdmin, (request, response) => {
   const name = validateText(request.body?.name, '商品名称');
   const sku = validateText(request.body?.sku, '商品编号');
+  productImageDirectory(0, sku, 'main');
   const genericTitle = validateText(request.body?.genericTitle, '通用标题', false);
   const genericPrice = parseOptionalPrice(request.body?.genericPrice);
   const platforms = request.body?.platforms || {};
@@ -183,38 +417,47 @@ router.post('/products', (request, response) => {
   }
 });
 
-router.put('/products/:id', (request, response) => {
+router.put('/products/:id', requireAdmin, (request, response) => {
   const id = parseId(request.params.id);
-  requireProduct(id);
+  const previous = requireProduct(id);
   const name = validateText(request.body?.name, '商品名称');
   const sku = validateText(request.body?.sku, '商品编号');
+  productImageDirectory(id, sku, 'main');
   const genericTitle = validateText(request.body?.genericTitle, '通用标题', false);
   const genericPrice = parseOptionalPrice(request.body?.genericPrice);
   const platforms = request.body?.platforms || {};
-  try {
-    db.transaction(() => {
-      db.prepare(`UPDATE products SET name = ?, sku = ?, generic_title = ?, generic_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(name, sku, genericTitle, genericPrice, id);
-      const updatePlatform = db.prepare(`UPDATE platform_content SET title = ?, price = ? WHERE product_id = ? AND platform = ?`);
-      for (const platform of ['amazon', 'tmall'] as const) {
-        const content = platforms[platform] || {};
-        updatePlatform.run(validateText(content.title, `${platform} 标题`, false), parseOptionalPrice(content.price), id, platform);
-      }
-    })();
-    db.persist();
-  } catch (error) {
-    if (String(error).includes('UNIQUE constraint failed: products.sku')) throw httpError(409, '商品编号已经存在');
-    throw error;
-  }
+  const platformValues = Object.fromEntries((['amazon', 'tmall'] as const).map((platform) => {
+    const content = platforms[platform] || {};
+    return [platform, {
+      title: validateText(content.title, `${platform} 标题`, false),
+      price: parseOptionalPrice(content.price),
+    }];
+  })) as Record<Platform, { title: string; price: number | null }>;
+  const duplicateSku = db.prepare('SELECT id FROM products WHERE sku = ? AND id <> ?').get(sku, id) as { id?: number } | undefined;
+  if (duplicateSku) throw httpError(409, '商品编号已经存在');
+  const update = (values: { name: string; sku: string; genericTitle: string; genericPrice: number | null }, content: Record<Platform, { title: string; price: number | null }>, updatedAt?: string) => {
+    db.prepare(`UPDATE products SET name = ?, sku = ?, generic_title = ?, generic_price = ?, updated_at = COALESCE(?, CURRENT_TIMESTAMP) WHERE id = ?`).run(values.name, values.sku, values.genericTitle, values.genericPrice, updatedAt ?? null, id);
+    for (const platform of ['amazon', 'tmall'] as const) {
+      db.prepare('UPDATE platform_content SET title = ?, price = ? WHERE product_id = ? AND platform = ?').run(content[platform].title, content[platform].price, id, platform);
+    }
+  };
+  renameProductImages(id, sku,
+    () => update({ name, sku, genericTitle, genericPrice }, platformValues),
+    () => update(previous, {
+      amazon: { title: previous.amazonTitle, price: previous.amazonPrice },
+      tmall: { title: previous.tmallTitle, price: previous.tmallPrice },
+    }, previous.updatedAt),
+  );
   response.json({ product: normalizeProduct(requireProduct(id)) });
 });
 
-router.delete('/products/:id', (request, response) => {
+router.delete('/products/:id', requireAdmin, (request, response) => {
   const id = parseId(request.params.id);
   requireProduct(id);
-  const storedNames = db.prepare('SELECT stored_name AS storedName FROM images WHERE product_id = ?').all(id) as Array<{ storedName: string }>;
+  const storedNames = db.prepare('SELECT DISTINCT stored_name AS storedName FROM images WHERE product_id = ?').all(id) as Array<{ storedName: string }>;
   db.prepare('DELETE FROM products WHERE id = ?').run(id);
   db.persist();
-  for (const image of storedNames) removeStoredFile(image.storedName);
+  for (const image of storedNames) removeStoredFileIfUnreferenced(image.storedName);
   response.status(204).send();
 });
 
@@ -240,9 +483,9 @@ function normalizeGroupRows(productId: number, scope: ImageScope, kind: ImageKin
   }
 }
 
-router.post('/products/:id/images', upload.array('files', 30), (request, response) => {
+router.post('/products/:id/images', requireAdmin, upload.array('files', 30), (request, response) => {
   const id = parseId(request.params.id);
-  requireProduct(id);
+  const product = requireProduct(id);
   const files = (request.files || []) as Express.Multer.File[];
   if (!files.length) throw httpError(400, '请选择至少一张图片');
   const scope = String(request.body?.scope || 'common') as ImageScope;
@@ -252,24 +495,51 @@ router.post('/products/:id/images', upload.array('files', 30), (request, respons
   if (!['all', 'desktop', 'mobile'].includes(device) || (device !== 'all' && (scope !== 'amazon' || kind !== 'detail'))) throw httpError(400, '设备专属图片仅支持亚马逊详情图');
   const maxStats = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS maxOrder, COALESCE(MAX(row_order), -1) AS maxRow FROM images WHERE product_id = ? AND scope = ? AND kind = ? AND device = ?').get(id, scope, kind, device) as { maxOrder: number; maxRow: number };
   const insert = db.prepare(`INSERT INTO images (product_id, scope, kind, device, original_name, stored_name, mime_type, size_bytes, sort_order, row_order, col_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const directory = productImageDirectory(id, product.sku, kind);
   const saved: Array<{ storedName: string; originalName: string }> = [];
+  const insertedIds: number[] = [];
+  let committed = false;
+  const candidates = db.prepare('SELECT DISTINCT stored_name AS storedName, mime_type AS mimeType, size_bytes AS sizeBytes FROM images WHERE product_id = ? AND kind = ?').all(id, kind) as Array<{ storedName: string; mimeType: string; sizeBytes: number }>;
+  const hashes = new Map<string, string>();
   try {
     db.transaction(() => {
       files.forEach((file, index) => {
-        const savedFile = saveUploadedFile(file);
-        saved.push({ storedName: savedFile.storedName, originalName: file.originalname });
-        insert.run(id, scope, kind, device, file.originalname, savedFile.storedName, savedFile.mimeType, savedFile.sizeBytes, maxStats.maxOrder + index + 1, maxStats.maxRow + index + 1, 0);
+        validateUploadedFile(file);
+        const hash = contentHash(file.buffer);
+        const matching = candidates.find((candidate) => {
+          if (candidate.mimeType !== file.mimetype || candidate.sizeBytes !== file.size) return false;
+          let storedHash = hashes.get(candidate.storedName);
+          if (!storedHash) {
+            const source = resolveStoredFilePath(candidate.storedName);
+            if (!fs.statSync(source, { throwIfNoEntry: false })?.isFile()) return false;
+            storedHash = contentHash(fs.readFileSync(source));
+            hashes.set(candidate.storedName, storedHash);
+          }
+          return storedHash === hash;
+        });
+        const savedFile = matching || saveUploadedFile(file, directory);
+        if (!matching) {
+          saved.push({ storedName: savedFile.storedName, originalName: file.originalname });
+          candidates.push(savedFile);
+          hashes.set(savedFile.storedName, hash);
+        }
+        const result = insert.run(id, scope, kind, device, file.originalname, savedFile.storedName, savedFile.mimeType, savedFile.sizeBytes, maxStats.maxOrder + index + 1, maxStats.maxRow + index + 1, 0);
+        insertedIds.push(Number(result.lastInsertRowid));
       });
     })();
+    committed = true;
     db.persist();
   } catch (error) {
+    if (committed) db.transaction(() => {
+      for (const imageId of insertedIds) db.prepare('DELETE FROM images WHERE id = ? AND product_id = ?').run(imageId, id);
+    })();
     for (const file of saved) removeStoredFile(file.storedName);
     throw error;
   }
   response.status(201).json({ product: normalizeProduct(requireProduct(id)) });
 });
 
-router.post('/products/:id/images/import', (request, response) => {
+router.post('/products/:id/images/import', requireAdmin, (request, response) => {
   const id = parseId(request.params.id);
   requireProduct(id);
   const scope = String(request.body?.scope || '') as ImageScope;
@@ -283,34 +553,34 @@ router.post('/products/:id/images/import', (request, response) => {
   }
   const sourceImages = db.prepare(`
     SELECT original_name AS originalName, stored_name AS storedName, mime_type AS mimeType, size_bytes AS sizeBytes
-    FROM images WHERE product_id = ? AND scope = 'common' AND kind = ? AND device = 'all'
+    FROM images AS common_images
+    WHERE product_id = ? AND scope = 'common' AND kind = ? AND device = 'all'
+      AND NOT EXISTS (
+        SELECT 1 FROM images AS target_images
+        WHERE target_images.product_id = common_images.product_id
+          AND target_images.scope = ? AND target_images.kind = ? AND target_images.device = ?
+          AND target_images.stored_name = common_images.stored_name
+      )
     ORDER BY sort_order, id
-  `).all(id, kind) as Array<{ originalName: string; storedName: string; mimeType: string; sizeBytes: number }>;
+  `).all(id, kind, scope, kind, device) as Array<{ originalName: string; storedName: string; mimeType: string; sizeBytes: number }>;
   if (!sourceImages.length) {
-    throw httpError(400, `上方通用${kind === 'main' ? '主图' : '详情图'}暂无可导入的图片`);
+    throw httpError(400, `上方通用${kind === 'main' ? '主图' : '详情图'}暂无新的可导入图片`);
   }
   const maxStats = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS maxOrder, COALESCE(MAX(row_order), -1) AS maxRow FROM images WHERE product_id = ? AND scope = ? AND kind = ? AND device = ?').get(id, scope, kind, device) as { maxOrder: number; maxRow: number };
   const insert = db.prepare(`INSERT INTO images (product_id, scope, kind, device, original_name, stored_name, mime_type, size_bytes, sort_order, row_order, col_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const clonedNames: string[] = [];
-  try {
-    db.transaction(() => {
-      sourceImages.forEach((source, index) => {
-        const cloned = cloneStoredFile(source.storedName);
-        clonedNames.push(cloned.storedName);
-        const rowOrder = maxStats.maxRow + index + 1;
-        const colOrder = 0;
-        insert.run(id, scope, kind, device, source.originalName, cloned.storedName, source.mimeType, cloned.sizeBytes, maxStats.maxOrder + index + 1, rowOrder, colOrder);
-      });
-    })();
-    db.persist();
-  } catch (error) {
-    for (const storedName of clonedNames) removeStoredFile(storedName);
-    throw error;
-  }
+  db.transaction(() => {
+    sourceImages.forEach((source, index) => {
+      const rowOrder = maxStats.maxRow + index + 1;
+      const colOrder = 0;
+      // Importing creates another usage record, not another physical file.
+      insert.run(id, scope, kind, device, source.originalName, source.storedName, source.mimeType, source.sizeBytes, maxStats.maxOrder + index + 1, rowOrder, colOrder);
+    });
+  })();
+  db.persist();
   response.status(201).json({ product: normalizeProduct(requireProduct(id)) });
 });
 
-router.delete('/images/:id', (request, response) => {
+router.delete('/images/:id', requireAdmin, (request, response) => {
   const imageId = parseId(request.params.id);
   const image = db.prepare('SELECT stored_name AS storedName, product_id AS productId, scope, kind, device FROM images WHERE id = ?').get(imageId) as { storedName: string; productId: number; scope: ImageScope; kind: ImageKind; device: ImageDevice } | undefined;
   if (!image) throw httpError(404, '图片不存在');
@@ -319,11 +589,11 @@ router.delete('/images/:id', (request, response) => {
     normalizeGroupRows(image.productId, image.scope, image.kind, image.device);
   })();
   db.persist();
-  removeStoredFile(image.storedName);
+  removeStoredFileIfUnreferenced(image.storedName);
   response.json({ product: normalizeProduct(requireProduct(image.productId)) });
 });
 
-router.put('/products/:id/images/order', (request, response) => {
+router.put('/products/:id/images/order', requireAdmin, (request, response) => {
   const id = parseId(request.params.id);
   requireProduct(id);
   const scope = String(request.body?.scope || 'common') as ImageScope;

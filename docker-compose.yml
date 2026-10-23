@@ -9,6 +9,7 @@ services:
       DATA_DIR: /data
       CLIENT_DIST_DIR: /app/client/dist
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4000}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       VISION_API_BASE_URL: ${VISION_API_BASE_URL:-}
       VISION_API_KEY: ${VISION_API_KEY:-}
       VISION_MODEL: ${VISION_MODEL:-}

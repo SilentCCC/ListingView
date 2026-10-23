@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import initSqlJs, { type Database as SqlDatabase, type SqlJsStatic, type Statement } from 'sql.js';
 import { databasePath, dataDir, sqlWasmDir } from './config.js';
 
@@ -31,7 +32,17 @@ class SqliteCompat {
   prepare(sql: string) { return new PreparedStatement(this.database, sql); }
   pragma(sql: string) { this.database.run(`PRAGMA ${sql}`); }
   transaction<T>(callback: () => T) { return () => { this.database.run('BEGIN'); try { const result = callback(); this.database.run('COMMIT'); return result; } catch (error) { this.database.run('ROLLBACK'); throw error; } }; }
-  persist() { fs.writeFileSync(databasePath, Buffer.from(this.database.export())); }
+  persist() {
+    const temporaryPath = `${databasePath}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporaryPath, Buffer.from(this.database.export()), { flag: 'wx', mode: 0o640 });
+      fs.renameSync(temporaryPath, databasePath);
+    } finally {
+      // sql.js export reopens its connection and resets connection pragmas.
+      this.database.run('PRAGMA foreign_keys = ON');
+      fs.rmSync(temporaryPath, { force: true });
+    }
+  }
 }
 export let db: SqliteCompat;
 export async function initDatabase() {
@@ -42,11 +53,11 @@ export async function initDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, sku TEXT NOT NULL UNIQUE, generic_title TEXT NOT NULL DEFAULT '', generic_price REAL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS platform_content (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, platform TEXT NOT NULL CHECK (platform IN ('amazon', 'tmall')), title TEXT NOT NULL DEFAULT '', price REAL, UNIQUE(product_id, platform));
-    CREATE TABLE IF NOT EXISTS images (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, scope TEXT NOT NULL CHECK (scope IN ('common', 'amazon', 'tmall')), kind TEXT NOT NULL CHECK (kind IN ('main', 'detail')), device TEXT NOT NULL DEFAULT 'all' CHECK (device IN ('all', 'desktop', 'mobile')), original_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS images (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, scope TEXT NOT NULL CHECK (scope IN ('common', 'amazon', 'tmall')), kind TEXT NOT NULL CHECK (kind IN ('main', 'detail')), device TEXT NOT NULL DEFAULT 'all' CHECK (device IN ('all', 'desktop', 'mobile')), original_name TEXT NOT NULL, stored_name TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS idx_products_updated_at ON products(updated_at DESC);
 
   `);
-  const imageColumns = db.prepare('PRAGMA table_info(images)').all() as Array<{ name: string }>;
+  let imageColumns = db.prepare('PRAGMA table_info(images)').all() as Array<{ name: string }>;
   if (!imageColumns.some((column) => column.name === 'device')) {
     db.exec("ALTER TABLE images ADD COLUMN device TEXT NOT NULL DEFAULT 'all'");
   }
@@ -59,6 +70,38 @@ export async function initDatabase() {
   }
   if (!hasRowOrder) {
     db.exec('UPDATE images SET row_order = sort_order, col_order = 0');
+  }
+
+  // Imports are references to the same physical file. Older databases used
+  // UNIQUE(stored_name), so migrate that constraint away before sharing files.
+  const imageTableSql = String((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'images'").get() as { sql?: string } | undefined)?.sql || '');
+  if (/stored_name\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(imageTableSql)) {
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.exec(`
+        CREATE TABLE images_shared (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          scope TEXT NOT NULL CHECK (scope IN ('common', 'amazon', 'tmall')),
+          kind TEXT NOT NULL CHECK (kind IN ('main', 'detail')),
+          device TEXT NOT NULL DEFAULT 'all' CHECK (device IN ('all', 'desktop', 'mobile')),
+          original_name TEXT NOT NULL,
+          stored_name TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          row_order INTEGER NOT NULL DEFAULT 0,
+          col_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO images_shared (id, product_id, scope, kind, device, original_name, stored_name, mime_type, size_bytes, sort_order, row_order, col_order, created_at)
+          SELECT id, product_id, scope, kind, device, original_name, stored_name, mime_type, size_bytes, sort_order, row_order, col_order, created_at FROM images;
+        DROP TABLE images;
+        ALTER TABLE images_shared RENAME TO images;
+      `);
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
   }
   db.exec('DROP INDEX IF EXISTS idx_images_product_scope_kind_order');
   db.exec('CREATE INDEX IF NOT EXISTS idx_images_product_scope_kind_device_order ON images(product_id, scope, kind, device, sort_order)');

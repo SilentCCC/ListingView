@@ -8,11 +8,20 @@ import { httpError } from './http.js';
 fs.mkdirSync(uploadsDir, { recursive: true });
 
 function getSafeStoredPath(storedName: string): string | null {
-  if (!storedName || /[\\/\0]/.test(storedName)) return null;
+  // Database paths always use forward slashes, independently of the host OS.
+  if (!storedName || /[\\\0]/.test(storedName)) return null;
+  const parts = storedName.split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..' || /[:*?"<>|\x00-\x1f]/.test(part))) return null;
   const root = path.resolve(uploadsDir);
-  const safePath = path.resolve(root, storedName);
+  const safePath = path.resolve(root, ...parts);
   const relative = path.relative(root, safePath);
   if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  // Refuse symlinks inside uploads as well as lexical path traversal.
+  let current = root;
+  for (const part of parts) {
+    current = path.join(current, part);
+    if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) return null;
+  }
   return safePath;
 }
 
@@ -22,11 +31,32 @@ export function resolveStoredFilePath(storedName: string): string {
   return safePath;
 }
 
+export function ensureStoredFileDirectory(storedName: string): void {
+  const destination = resolveStoredFilePath(storedName);
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o750 });
+}
+
+export function pruneStoredFileDirectories(storedName: string): void {
+  const safePath = getSafeStoredPath(storedName);
+  if (!safePath) return;
+  const root = path.resolve(uploadsDir);
+  let directory = path.dirname(safePath);
+  while (directory !== root) {
+    try { fs.rmdirSync(directory); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') return; // Only remove empty directories; never recurse.
+    }
+    directory = path.dirname(directory);
+  }
+}
+
 export function removeStoredFile(storedName: string): void {
   const safePath = getSafeStoredPath(storedName);
   if (!safePath) return;
   try { fs.unlinkSync(safePath); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  pruneStoredFileDirectories(storedName);
 }
 
 function hasSignature(buffer: Buffer, mimeType: string): boolean {
@@ -49,23 +79,12 @@ export function validateUploadedFile(file: Express.Multer.File): void {
   if (!hasSignature(file.buffer, file.mimetype)) throw httpError(415, '图片内容校验失败');
 }
 
-export function saveUploadedFile(file: Express.Multer.File): { storedName: string; mimeType: string; sizeBytes: number } {
+export function saveUploadedFile(file: Express.Multer.File, directory: string): { storedName: string; mimeType: string; sizeBytes: number } {
   validateUploadedFile(file);
   const extension = path.extname(file.originalname).toLowerCase();
-  const storedName = `${crypto.randomUUID()}${extension}`;
-  const destination = path.resolve(uploadsDir, storedName);
+  const storedName = path.posix.join(directory, `${crypto.randomUUID()}${extension}`);
+  ensureStoredFileDirectory(storedName);
+  const destination = resolveStoredFilePath(storedName);
   fs.writeFileSync(destination, file.buffer, { flag: 'wx', mode: 0o640 });
   return { storedName, mimeType: file.mimetype, sizeBytes: file.size };
-}
-
-export function cloneStoredFile(sourceStoredName: string): { storedName: string; sizeBytes: number } {
-  const sourcePath = resolveStoredFilePath(sourceStoredName);
-  const stat = fs.statSync(sourcePath, { throwIfNoEntry: false });
-  if (!stat?.isFile()) throw httpError(404, '源图片文件不存在');
-  const extension = path.extname(sourceStoredName).toLowerCase() || '.jpg';
-  const storedName = `${crypto.randomUUID()}${extension}`;
-  const destination = path.resolve(uploadsDir, storedName);
-  fs.copyFileSync(sourcePath, destination, fs.constants.COPYFILE_EXCL);
-  try { fs.chmodSync(destination, 0o640); } catch { /* ignore on platforms without chmod */ }
-  return { storedName, sizeBytes: stat.size };
 }

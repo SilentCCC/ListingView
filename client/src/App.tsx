@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, ImagePlus, LayoutTemplate, LoaderCircle, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react';
-import { api, imageUrl } from './api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, ImagePlus, KeyRound, LayoutTemplate, LoaderCircle, Lock, LogOut, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react';
+import { api, imageUrl, setStoredAdminToken } from './api';
 import { ImageManager, PreviewModal, Section } from './components/ImageManager';
 import { PreviewControls, initialDraft } from './components/PreviewControls';
 import { ProductSidebar } from './components/ProductSidebar';
@@ -16,9 +16,19 @@ function App() {
   const [platform, setPlatform] = useState<Platform>('amazon');
   const [device, setDevice] = useState<Device>('desktop');
   const [amazonDetailDevice, setAmazonDetailDevice] = useState<ImageDevice>('desktop');
+  const [canEdit, setCanEdit] = useState(true);
+  const [passwordRequired, setPasswordRequired] = useState(false);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [authPassword, setAuthPassword] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [pendingAuthAction, setPendingAuthAction] = useState<'none' | 'edit' | 'create'>('none');
   const [editMode, setEditMode] = useState(true);
+  const activeEditMode = canEdit && editMode;
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState<Platform | null>(null);
+  const downloadInFlight = useRef(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [previewImage, setPreviewImage] = useState<ProductImage | null>(null);
   const [visionConfigured, setVisionConfigured] = useState<boolean | null>(null);
@@ -66,11 +76,99 @@ function App() {
     setOverwriteRecognition(false);
   }, [selectedId]);
   useEffect(() => {
-    void api.getVisionStatus().then((result) => { applyVisionStatus(result); setVisionStatusUnavailable(false); }).catch(() => { setVisionConfigured(false); setVisionStatusUnavailable(true); });
+    void api.getAuthStatus().then((status) => {
+      setCanEdit(status.authenticated);
+      setPasswordRequired(status.passwordRequired);
+      if (!status.authenticated) {
+        setEditMode(false);
+      }
+    }).catch(() => {
+      setCanEdit(true);
+      setPasswordRequired(false);
+    });
   }, []);
+  useEffect(() => {
+    if (!canEdit) return;
+    void api.getVisionStatus().then((result) => { applyVisionStatus(result); setVisionStatusUnavailable(false); }).catch(() => { setVisionConfigured(false); setVisionStatusUnavailable(true); });
+  }, [canEdit]);
 
-  const selectProduct = (product: Product, mode: 'edit' | 'preview') => { setSelectedId(product.id); setEditMode(mode === 'edit'); setWorkspaceOpen(true); setNotice(null); };
-  const createProduct = () => { setSelectedId(null); setDraft(initialDraft()); setEditMode(true); setWorkspaceOpen(true); setNotice(null); };
+  const openUnlockDialog = (nextAction: 'none' | 'edit' | 'create' = 'none', message: string | null = null) => {
+    setPendingAuthAction(nextAction);
+    setAuthPassword('');
+    setAuthError(message);
+    setAuthDialogOpen(true);
+  };
+  const handleUnauthorizedError = (error: any, retryAction: 'none' | 'edit' | 'create' = 'edit'): boolean => {
+    if (error?.status === 401) {
+      setStoredAdminToken('');
+      setCanEdit(false);
+      setPasswordRequired(true);
+      setEditMode(false);
+      openUnlockDialog(retryAction, '需要输入管理员密码才能编辑');
+      return true;
+    }
+    return false;
+  };
+  const submitUnlock = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!authPassword.trim()) {
+      setAuthError('请输入管理员密码');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const status = await api.loginAdmin(authPassword);
+      setCanEdit(status.authenticated);
+      setPasswordRequired(status.passwordRequired);
+      setAuthDialogOpen(false);
+      setAuthPassword('');
+      if (pendingAuthAction === 'create') {
+        setSelectedId(null);
+        setDraft(initialDraft());
+        setEditMode(true);
+        setWorkspaceOpen(true);
+      } else if (pendingAuthAction === 'edit') {
+        setEditMode(true);
+      }
+      setPendingAuthAction('none');
+      setNotice({ type: 'success', text: '已进入编辑管理模式' });
+    } catch (error: any) {
+      setAuthError(error.message || '密码验证失败');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+  const lockEditing = async () => {
+    await api.logoutAdmin().catch(() => undefined);
+    setCanEdit(false);
+    setEditMode(false);
+    if (!selectedProduct) setWorkspaceOpen(false);
+    setNotice({ type: 'success', text: '已退出编辑模式，当前为访客只读视图' });
+  };
+  const selectProduct = (product: Product, mode: 'edit' | 'preview') => {
+    setSelectedId(product.id);
+    if (mode === 'edit' && !canEdit) {
+      setEditMode(false);
+      setWorkspaceOpen(true);
+      openUnlockDialog('edit');
+      return;
+    }
+    setEditMode(mode === 'edit' && canEdit);
+    setWorkspaceOpen(true);
+    setNotice(null);
+  };
+  const createProduct = () => {
+    if (!canEdit) {
+      openUnlockDialog('create');
+      return;
+    }
+    setSelectedId(null);
+    setDraft(initialDraft());
+    setEditMode(true);
+    setWorkspaceOpen(true);
+    setNotice(null);
+  };
   const updateDraft = (field: string, value: string) => setDraft((current) => ({ ...current, [field]: value }));
   const updatePlatformDraft = (key: 'title' | 'price', value: string) => setDraft((current) => ({ ...current, platforms: { ...current.platforms, [platform]: { ...current.platforms[platform], [key]: value } } }));
   const toggleRecognitionImage = (imageId: number) => {
@@ -91,7 +189,7 @@ function App() {
       setVisionApiKey('');
       setVisionConfigMessage({ type: 'success', text: '配置已安全保存到服务端数据目录。API Key 不会返回到浏览器。' });
     } catch (error: any) {
-      setVisionConfigMessage({ type: 'error', text: error.message || '保存识图 API 配置失败' });
+      if (!handleUnauthorizedError(error, 'edit')) setVisionConfigMessage({ type: 'error', text: error.message || '保存识图 API 配置失败' });
     } finally { setSavingVisionConfig(false); }
   };
   const resetVisionConfiguration = async () => {
@@ -104,7 +202,7 @@ function App() {
       setVisionApiKey('');
       setVisionConfigMessage({ type: 'success', text: '已恢复服务端环境变量配置。' });
     } catch (error: any) {
-      setVisionConfigMessage({ type: 'error', text: error.message || '恢复环境配置失败' });
+      if (!handleUnauthorizedError(error, 'edit')) setVisionConfigMessage({ type: 'error', text: error.message || '恢复环境配置失败' });
     } finally { setSavingVisionConfig(false); }
   };
 
@@ -128,9 +226,24 @@ function App() {
       }));
       setRecognitionMessage({ type: 'success', text: '识别结果已填入左侧草稿。商品编号和价格未改动，请检查后手动保存。' });
     } catch (error: any) {
-      setRecognitionMessage({ type: 'error', text: error.message || '图片识别失败，请稍后重试' });
+      if (!handleUnauthorizedError(error, 'edit')) setRecognitionMessage({ type: 'error', text: error.message || '图片识别失败，请稍后重试' });
     } finally { setRecognizing(false); }
   };
+  const downloadImages = async (targetPlatform: Platform) => {
+    if (!selectedProduct || downloadInFlight.current) return;
+    downloadInFlight.current = true;
+    setDownloading(targetPlatform);
+    try {
+      await api.downloadPlatformImages(selectedProduct, targetPlatform);
+      setNotice({ type: 'success', text: '图片 ZIP 已交给浏览器下载，原图画质和尺寸保持不变。' });
+    } catch (error: any) {
+      setNotice({ type: 'error', text: error.message || '图片下载失败，请重试' });
+    } finally {
+      downloadInFlight.current = false;
+      setDownloading(null);
+    }
+  };
+
   const save = async () => {
     if (!draft.name.trim() || !draft.sku.trim()) { setNotice({ type: 'error', text: '商品名称和商品编号不能为空' }); return; }
     setBusy(true);
@@ -141,14 +254,14 @@ function App() {
       } }, selectedId ?? undefined);
       setProducts((current) => selectedId ? current.map((item) => item.id === result.product.id ? result.product : item) : [result.product, ...current]);
       setSelectedId(result.product.id); setNotice({ type: 'success', text: selectedId ? '商品已保存' : '商品已创建' });
-    } catch (error: any) { setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); }
+    } catch (error: any) { if (!handleUnauthorizedError(error, 'edit')) setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); }
   };
   const removeProduct = async () => {
     if (!selectedProduct || !window.confirm(`确定删除「${selectedProduct.name}」吗？图片文件也会被删除。`)) return;
     setBusy(true);
-    try { await api.deleteProduct(selectedProduct.id); const remaining = products.filter((item) => item.id !== selectedProduct.id); setProducts(remaining); setSelectedId(remaining[0]?.id ?? null); setNotice({ type: 'success', text: '商品已删除' }); } catch (error: any) { setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); }
+    try { await api.deleteProduct(selectedProduct.id); const remaining = products.filter((item) => item.id !== selectedProduct.id); setProducts(remaining); setSelectedId(remaining[0]?.id ?? null); setNotice({ type: 'success', text: '商品已删除' }); } catch (error: any) { if (!handleUnauthorizedError(error, 'edit')) setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); }
   };
-  const withProductUpdate = async (operation: () => Promise<{ product: Product }>) => { if (!selectedProduct) return; setBusy(true); try { const result = await operation(); setProducts((current) => current.map((item) => item.id === result.product.id ? result.product : item)); } catch (error: any) { setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); } };
+  const withProductUpdate = async (operation: () => Promise<{ product: Product }>) => { if (!selectedProduct) return; setBusy(true); try { const result = await operation(); setProducts((current) => current.map((item) => item.id === result.product.id ? result.product : item)); } catch (error: any) { if (!handleUnauthorizedError(error, 'edit')) setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); } };
   const upload = (scope: ImageScope, kind: ImageKind, imageDevice: ImageDevice = 'all') => (files: File[]) => withProductUpdate(() => api.uploadImages(selectedProduct!.id, files, scope, kind, imageDevice));
   const importCommon = (scope: ImageScope, kind: ImageKind, imageDevice: ImageDevice = 'all') => () => withProductUpdate(async () => {
     const result = await api.importCommonImages(selectedProduct!.id, scope, kind, imageDevice);
@@ -159,19 +272,19 @@ function App() {
   const reorder = (scope: ImageScope, kind: ImageKind, imageDevice: ImageDevice = 'all') => (images: ProductImage[], rows?: number[][]) => withProductUpdate(() => api.reorderImages(selectedProduct!.id, images.map((image) => image.id), scope, kind, imageDevice, rows));
 
   return <div className={`app-shell ${workspaceOpen ? 'app-shell--workspace' : 'app-shell--catalog'}`}>
-    {!workspaceOpen ? <ProductSidebar products={products} search={search} onSearch={setSearch} onSelect={selectProduct} onCreate={createProduct} /> : <>
+    {!workspaceOpen ? <ProductSidebar products={products} search={search} onSearch={setSearch} onSelect={selectProduct} onCreate={createProduct} canEdit={canEdit} passwordRequired={passwordRequired} onRequestUnlock={() => openUnlockDialog('none')} onLock={() => void lockEditing()} /> : <>
     <main className="workspace">
-      <header className="workspace-header"><div className="breadcrumbs"><button className="back-to-catalog" onClick={() => setWorkspaceOpen(false)}><ChevronLeft size={16} /> 商品宫格</button><ChevronRight size={14} /><strong>{selectedProduct?.name || '新建商品'}</strong></div><div className="header-actions"><span className={`sync-status ${busy ? 'is-busy' : ''}`}><span />{busy ? '处理中' : '本地数据已同步'}</span>{selectedProduct && <button className="ghost-button danger" onClick={() => void removeProduct()}><Trash2 size={15} /> 删除商品</button>}{editMode && <button className="primary-button" onClick={() => void save()} disabled={busy}><Save size={16} /> 保存商品</button>}</div></header>
+      <header className="workspace-header"><div className="breadcrumbs"><button className="back-to-catalog" onClick={() => setWorkspaceOpen(false)}><ChevronLeft size={16} /> 商品宫格</button><ChevronRight size={14} /><strong>{selectedProduct?.name || '新建商品'}</strong></div><div className="header-actions"><span className={`sync-status ${busy ? 'is-busy' : ''}`}><span />{busy ? '处理中' : '本地数据已同步'}</span>{passwordRequired && !canEdit && <button type="button" className="ghost-button auth-button" onClick={() => openUnlockDialog('edit')}><Lock size={15} /> 输入密码编辑</button>}{passwordRequired && canEdit && <button type="button" className="ghost-button auth-button" onClick={() => void lockEditing()}><LogOut size={15} /> 退出编辑</button>}{canEdit && selectedProduct && <button className="ghost-button danger" onClick={() => void removeProduct()}><Trash2 size={15} /> 删除商品</button>}{activeEditMode && <button className="primary-button" onClick={() => void save()} disabled={busy}><Save size={16} /> 保存商品</button>}</div></header>
       {notice && <div className={`notice notice--${notice.type}`}><AlertCircle size={16} />{notice.text}<button onClick={() => setNotice(null)}>×</button></div>}
-      <div className={`workspace-content ${!editMode ? 'workspace-content--preview' : ''}`}>
+      <div className={`workspace-content ${!activeEditMode ? 'workspace-content--preview' : ''}`}>
         <section className="editor-column">
-          <div className="page-intro"><div><span className="eyebrow">PRODUCT WORKSPACE</span><h2>{!editMode ? '商品详情预览' : selectedProduct ? '编辑商品' : '创建新商品'}</h2><p>{editMode ? '维护商品信息、平台素材与详情展示内容' : '预览当前商品在所选平台和设备上的展示效果'}</p></div><div className="view-mode-toggle"><button className={editMode ? 'active' : ''} onClick={() => setEditMode(true)}><FileText size={15} /> 编辑内容</button><button className={!editMode ? 'active' : ''} onClick={() => setEditMode(false)}><LayoutTemplate size={15} /> 预览效果</button></div></div>
-          {editMode ? <>
+          <div className="page-intro"><div><span className="eyebrow">PRODUCT WORKSPACE</span><h2>{!activeEditMode ? '商品详情预览' : selectedProduct ? '编辑商品' : '创建新商品'}</h2><p>{activeEditMode ? '维护商品信息、平台素材与详情展示内容' : '预览当前商品在所选平台和设备上的展示效果'}</p></div>{canEdit && <div className="view-mode-toggle"><button className={activeEditMode ? 'active' : ''} onClick={() => setEditMode(true)}><FileText size={15} /> 编辑内容</button><button className={!activeEditMode ? 'active' : ''} onClick={() => setEditMode(false)}><LayoutTemplate size={15} /> 预览效果</button></div>}</div>
+          {activeEditMode ? <>
             <Section title="基础信息" action={<span className="section-hint">必填项以 * 标注</span>}><div className="form-grid"><label>商品名称 *<input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="例如：轻量通勤双肩包" /></label><label>商品编号 *<input value={draft.sku} onChange={(event) => updateDraft('sku', event.target.value)} placeholder="例如：LV-2026-001" /></label><label className="span-2">通用标题<textarea value={draft.genericTitle} onChange={(event) => updateDraft('genericTitle', event.target.value)} placeholder="未设置平台标题时使用此标题" rows={2} /></label><label>通用价格<input type="number" min="0" step="0.01" value={draft.genericPrice} onChange={(event) => updateDraft('genericPrice', event.target.value)} placeholder="可选" /></label></div></Section>
             <Section title="平台内容"><div className="platform-form-tabs"><button className={platform === 'amazon' ? 'active' : ''} onClick={() => setPlatform('amazon')}>亚马逊内容</button><button className={platform === 'tmall' ? 'active' : ''} onClick={() => setPlatform('tmall')}>天猫内容</button></div><div className="form-grid"><label className="span-2">{platform === 'amazon' ? '亚马逊' : '天猫'}标题<textarea value={draft.platforms[platform].title} onChange={(event) => updatePlatformDraft('title', event.target.value)} placeholder="留空时自动使用通用标题" rows={3} /></label><label>平台价格<input type="number" min="0" step="0.01" value={draft.platforms[platform].price} onChange={(event) => updatePlatformDraft('price', event.target.value)} placeholder="留空时使用通用价格" /></label></div></Section>
-            {selectedProduct ? <><Section title="图片素材" action={<span className="section-hint"><UploadCloud size={14} /> 支持 JPG、PNG、WEBP、GIF，单张不超过 10 MB</span>}><div className="asset-scope-tabs"><span className="active">通用素材</span><span>亚马逊专属</span><span>天猫专属</span></div><ImageManager product={selectedProduct} scope="common" kind="main" onUpload={upload('common', 'main')} onDelete={deleteImage} onReorder={reorder('common', 'main')} onPreview={setPreviewImage} /><ImageManager product={selectedProduct} scope="common" kind="detail" onUpload={upload('common', 'detail')} onDelete={deleteImage} onReorder={reorder('common', 'detail')} onPreview={setPreviewImage} /><div className="asset-platform-note">平台专属素材可在对应平台预览中单独维护，未设置时自动使用通用素材。</div></Section><Section title="平台专属图片"><div className="platform-assets-grid"><div><h4>亚马逊 · 主图</h4><ImageManager product={selectedProduct} scope="amazon" kind="main" onUpload={upload('amazon', 'main')} onImportCommon={importCommon('amazon', 'main')} onDelete={deleteImage} onReorder={reorder('amazon', 'main')} onPreview={setPreviewImage} /></div><div><h4>亚马逊 · 详情图</h4><div className="device-image-tabs" role="tablist" aria-label="亚马逊详情图设备"><button type="button" role="tab" aria-selected={amazonDetailDevice === 'desktop'} className={amazonDetailDevice === 'desktop' ? 'active' : ''} onClick={() => setAmazonDetailDevice('desktop')}>电脑版</button><button type="button" role="tab" aria-selected={amazonDetailDevice === 'mobile'} className={amazonDetailDevice === 'mobile' ? 'active' : ''} onClick={() => setAmazonDetailDevice('mobile')}>手机版</button><button type="button" role="tab" aria-selected={amazonDetailDevice === 'all'} className={amazonDetailDevice === 'all' ? 'active' : ''} onClick={() => setAmazonDetailDevice('all')}>通用回退</button></div><p className="device-image-hint">{amazonDetailDevice === 'all' ? '通用详情图将在对应设备未配置专属图片时显示。支持宫格上下左右拖动，同行最多 3 张组成横滑。' : `当前管理${amazonDetailDevice === 'desktop' ? '电脑版' : '手机版'}详情图；支持宫格上下左右拖动，同行最多 3 张组成横滑。`}</p><ImageManager product={selectedProduct} scope="amazon" kind="detail" device={amazonDetailDevice} gridMode onUpload={upload('amazon', 'detail', amazonDetailDevice)} onImportCommon={importCommon('amazon', 'detail', amazonDetailDevice)} onDelete={deleteImage} onReorder={reorder('amazon', 'detail', amazonDetailDevice)} onPreview={setPreviewImage} /></div><div><h4>天猫 · 主图</h4><ImageManager product={selectedProduct} scope="tmall" kind="main" onUpload={upload('tmall', 'main')} onImportCommon={importCommon('tmall', 'main')} onDelete={deleteImage} onReorder={reorder('tmall', 'main')} onPreview={setPreviewImage} /></div><div><h4>天猫 · 详情图</h4><ImageManager product={selectedProduct} scope="tmall" kind="detail" onUpload={upload('tmall', 'detail')} onImportCommon={importCommon('tmall', 'detail')} onDelete={deleteImage} onReorder={reorder('tmall', 'detail')} onPreview={setPreviewImage} /></div></div></Section></> : <div className="create-tip"><UploadCloud size={22} /><strong>先保存商品，再上传图片</strong><span>保存后可管理主图、详情图及平台专属素材</span></div>}</> : <section className="preview-workspace"><div className="preview-workspace__header"><div><span className="eyebrow">LIVE PREVIEW</span><h2>商品详情预览</h2></div><PreviewControls platform={platform} device={device} onPlatform={setPlatform} onDevice={(nextPlatform, nextDevice) => { setPlatform(nextPlatform); setDevice(nextDevice); }} /></div>{selectedProduct ? <ProductPreview product={selectedProduct} products={products} platform={platform} device={device} onPreview={setPreviewImage} /> : <div className="empty-preview"><LoaderCircle size={25} /><span>保存商品后查看详情预览</span></div>}</section>}
+            {selectedProduct ? <><Section title="图片素材" action={<span className="section-hint"><UploadCloud size={14} /> 支持 JPG、PNG、WEBP、GIF，单张不超过 10 MB</span>}><div className="asset-scope-tabs"><span className="active">通用素材</span><span>亚马逊专属</span><span>天猫专属</span></div><ImageManager product={selectedProduct} scope="common" kind="main" onUpload={upload('common', 'main')} onDelete={deleteImage} onReorder={reorder('common', 'main')} onPreview={setPreviewImage} /><ImageManager product={selectedProduct} scope="common" kind="detail" onUpload={upload('common', 'detail')} onDelete={deleteImage} onReorder={reorder('common', 'detail')} onPreview={setPreviewImage} /><div className="asset-platform-note">平台专属素材可在对应平台预览中单独维护，未设置时自动使用通用素材。</div></Section><Section title="平台专属图片"><div className="platform-assets-grid"><div><h4>亚马逊 · 主图</h4><ImageManager product={selectedProduct} scope="amazon" kind="main" onUpload={upload('amazon', 'main')} onImportCommon={importCommon('amazon', 'main')} onDelete={deleteImage} onReorder={reorder('amazon', 'main')} onPreview={setPreviewImage} /></div><div><h4>亚马逊 · 详情图</h4><div className="device-image-tabs" role="tablist" aria-label="亚马逊详情图设备"><button type="button" role="tab" aria-selected={amazonDetailDevice === 'desktop'} className={amazonDetailDevice === 'desktop' ? 'active' : ''} onClick={() => setAmazonDetailDevice('desktop')}>电脑版</button><button type="button" role="tab" aria-selected={amazonDetailDevice === 'mobile'} className={amazonDetailDevice === 'mobile' ? 'active' : ''} onClick={() => setAmazonDetailDevice('mobile')}>手机版</button><button type="button" role="tab" aria-selected={amazonDetailDevice === 'all'} className={amazonDetailDevice === 'all' ? 'active' : ''} onClick={() => setAmazonDetailDevice('all')}>通用回退</button></div><p className="device-image-hint">{amazonDetailDevice === 'all' ? '通用详情图将在对应设备未配置专属图片时显示。支持宫格上下左右拖动，同行最多 3 张组成横滑。' : `当前管理${amazonDetailDevice === 'desktop' ? '电脑版' : '手机版'}详情图；支持宫格上下左右拖动，同行最多 3 张组成横滑。`}</p><ImageManager product={selectedProduct} scope="amazon" kind="detail" device={amazonDetailDevice} gridMode onUpload={upload('amazon', 'detail', amazonDetailDevice)} onImportCommon={importCommon('amazon', 'detail', amazonDetailDevice)} onDelete={deleteImage} onReorder={reorder('amazon', 'detail', amazonDetailDevice)} onPreview={setPreviewImage} /></div><div><h4>天猫 · 主图</h4><ImageManager product={selectedProduct} scope="tmall" kind="main" onUpload={upload('tmall', 'main')} onImportCommon={importCommon('tmall', 'main')} onDelete={deleteImage} onReorder={reorder('tmall', 'main')} onPreview={setPreviewImage} /></div><div><h4>天猫 · 详情图</h4><ImageManager product={selectedProduct} scope="tmall" kind="detail" onUpload={upload('tmall', 'detail')} onImportCommon={importCommon('tmall', 'detail')} onDelete={deleteImage} onReorder={reorder('tmall', 'detail')} onPreview={setPreviewImage} /></div></div></Section></> : <div className="create-tip"><UploadCloud size={22} /><strong>先保存商品，再上传图片</strong><span>保存后可管理主图、详情图及平台专属素材</span></div>}</> : <section className="preview-workspace"><div className="preview-workspace__header"><div><span className="eyebrow">LIVE PREVIEW</span><h2>商品详情预览</h2></div><PreviewControls onDownload={downloadImages} downloading={downloading} downloadDisabled={!selectedProduct} platform={platform} device={device} onPlatform={setPlatform} onDevice={(nextPlatform, nextDevice) => { setPlatform(nextPlatform); setDevice(nextDevice); }} /></div>{selectedProduct ? <ProductPreview product={selectedProduct} products={products} platform={platform} device={device} onPreview={setPreviewImage} /> : <div className="empty-preview"><LoaderCircle size={25} /><span>保存商品后查看详情预览</span></div>}</section>}
         </section>
-        {editMode && <aside className="right-rail"><div className="rail-title"><span>预览导航</span><small>LIVE</small></div><PreviewControls platform={platform} device={device} onPlatform={setPlatform} onDevice={(nextPlatform, nextDevice) => { setPlatform(nextPlatform); setDevice(nextDevice); }} /><div className="rail-tip"><strong>预览说明</strong><p>平台按钮位于上层，设备按钮位于平台下方。切换不会清空当前编辑草稿。</p></div><section className="vision-panel">
+        {activeEditMode && <aside className="right-rail"><div className="rail-title"><span>预览导航</span><small>LIVE</small></div><PreviewControls platform={platform} device={device} onPlatform={setPlatform} onDevice={(nextPlatform, nextDevice) => { setPlatform(nextPlatform); setDevice(nextDevice); }} /><div className="rail-tip"><strong>预览说明</strong><p>平台按钮位于上层，设备按钮位于平台下方。切换不会清空当前编辑草稿。</p></div><section className="vision-panel">
           <div className="vision-panel__heading"><span className="vision-panel__icon"><Sparkles size={15} /></span><div><strong>图片识别填资料</strong><small>第三方视觉 API</small></div></div>
           <details className="vision-config" open={visionConfigured !== true}>
             <summary><span>配置 URL、Key 和模型</span><small>{visionConfigured ? '已配置' : '尚未配置'}</small></summary>
@@ -216,6 +329,37 @@ function App() {
       </div>
     </main>
     </>}
+    {authDialogOpen && (
+      <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="输入管理员密码解锁编辑" onClick={() => !authBusy && setAuthDialogOpen(false)}>
+        <form className="auth-modal" onClick={(event) => event.stopPropagation()} onSubmit={(event) => void submitUnlock(event)}>
+          <div className="auth-modal__header">
+            <span className="auth-modal__icon"><KeyRound size={18} /></span>
+            <div>
+              <h3>管理员密码验证</h3>
+              <p>输入管理员密码后将显示新建、编辑、删除与图片上传选项</p>
+            </div>
+          </div>
+          <label className="auth-modal__field">
+            <span>管理员密码</span>
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(event) => setAuthPassword(event.target.value)}
+              placeholder="请输入管理员密码"
+              autoFocus
+              disabled={authBusy}
+            />
+          </label>
+          {authError && <div className="auth-modal__error"><AlertCircle size={14} /><span>{authError}</span></div>}
+          <div className="auth-modal__actions">
+            <button type="button" className="ghost-button" onClick={() => setAuthDialogOpen(false)} disabled={authBusy}>取消</button>
+            <button type="submit" className="primary-button" disabled={authBusy}>
+              {authBusy ? <><LoaderCircle className="spin" size={15} /> 验证中…</> : '解锁编辑'}
+            </button>
+          </div>
+        </form>
+      </div>
+    )}
     <PreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
   </div>;
 }
