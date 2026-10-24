@@ -214,7 +214,7 @@ function AmazonDetailCarouselRow({ row, rowIndex, productName, onPreview }: { ro
         <div className="amazon-recommendations__list">
           {recommendationSlots.map((item, index) => {
             if (!item) return <div className="amazon-recommendation-card amazon-recommendation-card--empty" key={`empty-${index}`} aria-hidden="true"><div className="amazon-recommendation-card__image" /></div>;
-            const image = item.effectiveImages.amazon.main[0] || item.effectiveImages.tmall.main[0];
+            const image = item.effectiveImages.amazon.main[0] || item.effectiveImages.tmall.main[0] || item.images.find((img) => img.kind === 'main');
             const itemTitle = item.platforms.amazon.title || item.genericTitle || item.name;
             const itemPrice = item.platforms.amazon.price ?? item.genericPrice;
             return <article className="amazon-recommendation-card" key={item.id}>

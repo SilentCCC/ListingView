@@ -69,27 +69,19 @@ export async function testImageExport(base: string, dataDir: string): Promise<vo
   assert((await fetch(base + '/api/products/999999999/export?platform=amazon')).status === 404, 'unknown product must be rejected');
   await upload('common', 'main', 'all', [bytes('main1'), bytes('main2')]);
   await upload('common', 'detail', 'all', [bytes('detail1'), bytes('detail2')]);
-  const common = {
-    ['主图/' + sku + '-主图-01.png']: bytes('main1'),
-    ['主图/' + sku + '-主图-02.png']: bytes('main2'),
-    ['详情图/' + sku + '-详情图-01.png']: bytes('detail1'),
-    ['详情图/' + sku + '-详情图-02.png']: bytes('detail2'),
-  };
-  await expectZip('amazon', common);
-  await expectZip('tmall', common);
+  // Common images must not appear in preview or platform export unless imported to that platform.
+  assert((await fetch(url('amazon'))).status === 400, 'unimported common images must not be exported for Amazon');
+  assert((await fetch(url('tmall'))).status === 400, 'unimported common images must not be exported for Tmall');
   const imported = await fetch(base + '/api/products/' + id + '/images/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'amazon', kind: 'main', device: 'all' }) });
   assert(imported.ok, 'common image import failed');
   await upload('amazon', 'main', 'all', [bytes('amazon-main')]);
-  await upload('amazon', 'detail', 'all', [bytes('unused-amazon-fallback')]);
   await upload('amazon', 'detail', 'desktop', [bytes('desktop1'), bytes('desktop2')]);
-  // Before a mobile override exists, its effective fallback must also be exported.
   await expectZip('amazon', {
     ['主图/' + sku + '-主图-01.png']: bytes('main1'),
     ['主图/' + sku + '-主图-02.png']: bytes('main2'),
     ['主图/' + sku + '-亚马逊-主图-01.png']: bytes('amazon-main'),
     ['详情图/' + sku + '-亚马逊-电脑-详情图-01.png']: bytes('desktop1'),
     ['详情图/' + sku + '-亚马逊-电脑-详情图-02.png']: bytes('desktop2'),
-    ['详情图/' + sku + '-亚马逊-详情图-01.png']: bytes('unused-amazon-fallback'),
   });
   const current = await upload('amazon', 'detail', 'mobile', [bytes('desktop1'), bytes('mobile-only')]);
   const expectedAmazon = {
@@ -104,7 +96,7 @@ export async function testImageExport(base: string, dataDir: string): Promise<vo
   await expectZip('amazon', expectedAmazon);
   const after = await fetch(base + '/api/products/' + id).then((r) => r.json()) as any;
   assert(JSON.stringify(after.product) === snapshot, 'export must not save, reorder or rename product data');
-  await expectZip('tmall', common);
+  assert((await fetch(url('tmall'))).status === 400, 'Tmall must remain empty before importing or uploading Tmall images');
   await upload('tmall', 'main', 'all', [bytes('tmall-main')]);
   await upload('tmall', 'detail', 'all', [bytes('tmall-detail')]);
   await expectZip('tmall', {
@@ -138,5 +130,5 @@ export async function testImageExport(base: string, dataDir: string): Promise<vo
   await expectZip('amazon', expectedAmazon);
   const deleted = await fetch(base + '/api/products/' + id, { method: 'DELETE' });
   assert(deleted.ok, 'export fixture cleanup failed');
-  console.log('Platform ZIP export tests passed (fallbacks, device union, shared files, original bytes, errors, cancellation).');
+  console.log('Platform ZIP export tests passed (explicit platform assets, device union, shared files, original bytes, errors, cancellation).');
 }

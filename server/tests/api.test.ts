@@ -114,8 +114,8 @@ try {
   const list = await fetch(`${base}/api/products`).then((response) => response.json()) as { products: any[] };
   assert(list.products.length >= 1, 'legacy product missing');
   const migratedLegacy = list.products.find((product: any) => product.sku === 'LEGACY-001');
-  assert(migratedLegacy?.images[0]?.device === 'all', 'legacy image was not migrated as a shared image');
-  assert(migratedLegacy?.effectiveImages.amazon.detailByDevice.desktop[0]?.id === 1, 'legacy Amazon detail image stopped working as a desktop fallback');
+  assert(migratedLegacy?.images[0]?.device === 'desktop', 'legacy Amazon detail image was not migrated to desktop device');
+  assert(migratedLegacy?.effectiveImages.amazon.detailByDevice.desktop[0]?.id === 1, 'legacy Amazon detail image stopped working as a desktop image');
   const preservedFile = await fetch(`${base}/uploads/legacy.png`);
   assert(preservedFile.ok && Buffer.compare(Buffer.from(await preservedFile.arrayBuffer()), legacyPng) === 0, 'legacy uploaded file was changed or removed');
   const created = await fetch(`${base}/api/products`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'API Test Product', sku: `API-${Date.now()}`, genericTitle: '测试标题', genericPrice: 88, platforms: { amazon: { title: 'Amazon title', price: 12 }, tmall: { title: '天猫标题', price: 88 } } }) }).then((response) => response.json()) as { product: any };
@@ -134,7 +134,7 @@ try {
   assert(unconfiguredRecognition.status === 503, 'recognition should explain when the provider is unconfigured');
 
   let uploadSequence = 0;
-  const uploadImage = async (scope: 'common' | 'amazon', device: 'all' | 'desktop' | 'mobile', kind = 'detail') => {
+  const uploadImage = async (scope: 'common' | 'amazon' | 'tmall', device: 'all' | 'desktop' | 'mobile', kind = 'detail') => {
     const imageForm = new FormData();
     imageForm.append('scope', scope); imageForm.append('kind', kind); imageForm.append('device', device);
     imageForm.append('files', new Blob([Buffer.concat([legacyPng, Buffer.from(`image-${++uploadSequence}`)])], { type: 'image/png' }), `${scope}-${device}.png`);
@@ -142,10 +142,19 @@ try {
     assert(response.ok, `upload failed for ${scope}/${device}`);
     return response.json() as Promise<{ product: any }>;
   };
-  await uploadImage('common', 'all');
-  const sharedUpload = await uploadImage('amazon', 'all');
-  const sharedImage = sharedUpload.product.images.find((image: any) => image.scope === 'amazon' && image.device === 'all');
-  assert(sharedUpload.product.effectiveImages.amazon.detailByDevice.mobile[0].id === sharedImage.id, 'shared Amazon detail fallback failed');
+  const commonOnlyUpload = await uploadImage('common', 'all');
+  assert(
+    commonOnlyUpload.product.effectiveImages.amazon.main.length === 0 &&
+    commonOnlyUpload.product.effectiveImages.amazon.detailByDevice.desktop.length === 0 &&
+    commonOnlyUpload.product.effectiveImages.tmall.main.length === 0 &&
+    commonOnlyUpload.product.effectiveImages.tmall.detail.length === 0,
+    'common images must not appear in effective preview images before being imported'
+  );
+  const rejectedAmazonAllForm = new FormData();
+  rejectedAmazonAllForm.append('scope', 'amazon'); rejectedAmazonAllForm.append('kind', 'detail'); rejectedAmazonAllForm.append('device', 'all');
+  rejectedAmazonAllForm.append('files', new Blob([legacyPng], { type: 'image/png' }), 'invalid.png');
+  assert((await fetch(`${base}/api/products/${created.product.id}/images`, { method: 'POST', body: rejectedAmazonAllForm })).status === 400, 'amazon detail device=all should be rejected');
+  await uploadImage('tmall', 'all');
   const desktopUpload = await uploadImage('amazon', 'desktop');
   const mobileUpload = await uploadImage('amazon', 'mobile');
   const desktopImage = desktopUpload.product.images.find((image: any) => image.device === 'desktop');
@@ -153,7 +162,7 @@ try {
   assert(desktopImage && mobileImage && desktopImage.id !== mobileImage.id, 'device-specific uploads were not stored separately');
   assert(mobileUpload.product.effectiveImages.amazon.detailByDevice.desktop[0].id === desktopImage.id, 'desktop preview selected the wrong detail images');
   assert(mobileUpload.product.effectiveImages.amazon.detailByDevice.mobile[0].id === mobileImage.id, 'mobile preview selected the wrong detail images');
-  assert(mobileUpload.product.effectiveImages.tmall.detail[0].scope === 'common', 'Tmall detail images should ignore Amazon device-specific assets');
+  assert(mobileUpload.product.effectiveImages.tmall.detail[0].scope === 'tmall', 'Tmall detail images should use Tmall platform assets only');
 
   await stopApp();
   startApp(true);
@@ -304,7 +313,7 @@ try {
   const mainFiles = fs.readdirSync(path.join(skuDirectory, '主图'));
   const detailFiles = fs.readdirSync(path.join(skuDirectory, '详情图'));
   assert(mainFiles.length === 1 && mainFiles.includes('5188-主图-01.png'), 'imported main must share one physical file');
-  for (const name of ['5188-详情图-01.png', '5188-亚马逊-详情图-01.png', '5188-亚马逊-电脑-详情图-01.png', '5188-亚马逊-手机-详情图-01.png']) {
+  for (const name of ['5188-详情图-01.png', '5188-天猫-详情图-01.png', '5188-亚马逊-电脑-详情图-01.png', '5188-亚马逊-手机-详情图-01.png']) {
     assert(detailFiles.includes(name), `missing classified image: ${name}`);
   }
   assert(mainFiles.length + detailFiles.length === new Set(savedProduct.images.map((image: any) => image.storedName)).size, 'imports duplicated physical files');
@@ -468,7 +477,7 @@ try {
   // Legacy flat files remain readable until saving, then move into the new layout.
   assert((await saveProduct(migratedLegacy.id, migratedLegacy.sku)).ok, 'legacy flat-file migration on save failed');
   const savedLegacy = await readProduct(migratedLegacy.id);
-  assert(savedLegacy.images[0].storedName === 'LEGACY-001/详情图/LEGACY-001-亚马逊-详情图-01.png', 'legacy image was not classified');
+  assert(savedLegacy.images[0].storedName === 'LEGACY-001/详情图/LEGACY-001-亚马逊-电脑-详情图-01.png', 'legacy image was not classified');
   assert((await readBytes(savedLegacy.images[0])).equals(legacyPng) && !fs.existsSync(path.join(dataDir, 'uploads', 'legacy.png')), 'legacy image content not preserved');
 
   await stopApp(); startApp(true); await waitForServer();

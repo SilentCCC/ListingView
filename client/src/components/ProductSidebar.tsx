@@ -62,7 +62,7 @@ export function ProductSidebar({
     </header>
     <div className="search-box"><Search size={16} /><input value={search} onChange={(event: ChangeEvent<HTMLInputElement>) => onSearch(event.target.value)} placeholder="搜索名称或编号" /></div>
     <div className="product-grid">{products.map((product) => {
-      const cover = product.effectiveImages.amazon.main[0] || product.effectiveImages.tmall.main[0];
+      const cover = product.effectiveImages.amazon.main[0] || product.effectiveImages.tmall.main[0] || product.images.find((image) => image.kind === 'main');
       return <article className="catalog-card" key={product.id}>
         <div
           className="catalog-card__image"

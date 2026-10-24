@@ -7,7 +7,7 @@ import './tmall.css';
 
 export function ProductPreview({ product, products, platform, device, onPreview }: { product: Product; products: Product[]; platform: Platform; device: Device; onPreview: (image: ProductImage) => void }) {
   const recommendations = useMemo(() => {
-    const candidates = products.filter((item) => item.id !== product.id && (item.effectiveImages.amazon.main.length > 0 || item.effectiveImages.tmall.main.length > 0));
+    const candidates = products.filter((item) => item.id !== product.id && (item.effectiveImages.amazon.main.length > 0 || item.effectiveImages.tmall.main.length > 0 || item.images.some((image) => image.kind === 'main')));
     for (let index = candidates.length - 1; index > 0; index -= 1) {
       const swapIndex = Math.floor(Math.random() * (index + 1));
       [candidates[index], candidates[swapIndex]] = [candidates[swapIndex], candidates[index]];

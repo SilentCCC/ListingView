@@ -70,16 +70,11 @@ function normalizeProduct(row: any): Product {
 }
 
 function buildEffectiveImages(images: ProductImage[], platform: Platform) {
-  const scoped = (kind: ImageKind) => {
-    const platformItems = images.filter((image) => image.scope === platform && image.kind === kind && image.device === 'all');
-    const commonItems = images.filter((image) => image.scope === 'common' && image.kind === kind && image.device === 'all');
-    return platformItems.length ? platformItems : commonItems;
-  };
+  const scoped = (kind: ImageKind) => images.filter((image) => image.scope === platform && image.kind === kind && image.device === 'all');
   const detail = scoped('detail');
   const amazonDetailsFor = (device: Device) => {
     if (platform !== 'amazon') return detail;
-    const deviceItems = images.filter((image) => image.scope === 'amazon' && image.kind === 'detail' && image.device === device);
-    return deviceItems.length ? deviceItems : detail;
+    return images.filter((image) => image.scope === 'amazon' && image.kind === 'detail' && image.device === device);
   };
   return { main: scoped('main'), detail, detailByDevice: { desktop: amazonDetailsFor('desktop'), mobile: amazonDetailsFor('mobile') } };
 }
@@ -492,7 +487,7 @@ router.post('/products/:id/images', requireAdmin, upload.array('files', 30), (re
   const kind = String(request.body?.kind || 'main') as ImageKind;
   const device = String(request.body?.device || 'all') as ImageDevice;
   if (!['common', 'amazon', 'tmall'].includes(scope) || !['main', 'detail'].includes(kind)) throw httpError(400, '图片范围或类型无效');
-  if (!['all', 'desktop', 'mobile'].includes(device) || (device !== 'all' && (scope !== 'amazon' || kind !== 'detail'))) throw httpError(400, '设备专属图片仅支持亚马逊详情图');
+  if (!['all', 'desktop', 'mobile'].includes(device) || (device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) || (scope === 'amazon' && kind === 'detail' && device === 'all')) throw httpError(400, '亚马逊详情图请选择电脑版或手机版');
   const maxStats = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS maxOrder, COALESCE(MAX(row_order), -1) AS maxRow FROM images WHERE product_id = ? AND scope = ? AND kind = ? AND device = ?').get(id, scope, kind, device) as { maxOrder: number; maxRow: number };
   const insert = db.prepare(`INSERT INTO images (product_id, scope, kind, device, original_name, stored_name, mime_type, size_bytes, sort_order, row_order, col_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const directory = productImageDirectory(id, product.sku, kind);
@@ -548,8 +543,8 @@ router.post('/products/:id/images/import', requireAdmin, (request, response) => 
   if (!['amazon', 'tmall'].includes(scope) || !['main', 'detail'].includes(kind) || !['all', 'desktop', 'mobile'].includes(device)) {
     throw httpError(400, '仅支持将通用素材导入到平台专属图片栏目');
   }
-  if (device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) {
-    throw httpError(400, '设备专属图片仅支持亚马逊详情图');
+  if ((device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) || (scope === 'amazon' && kind === 'detail' && device === 'all')) {
+    throw httpError(400, '亚马逊详情图请选择电脑版或手机版');
   }
   const sourceImages = db.prepare(`
     SELECT original_name AS originalName, stored_name AS storedName, mime_type AS mimeType, size_bytes AS sizeBytes
@@ -600,7 +595,7 @@ router.put('/products/:id/images/order', requireAdmin, (request, response) => {
   const kind = String(request.body?.kind || 'main') as ImageKind;
   const device = String(request.body?.device || 'all') as ImageDevice;
   if (!['common', 'amazon', 'tmall'].includes(scope) || !['main', 'detail'].includes(kind) || !['all', 'desktop', 'mobile'].includes(device)) throw httpError(400, '图片范围或类型无效');
-  if (device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) throw httpError(400, '设备专属图片仅支持亚马逊详情图');
+  if ((device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) || (scope === 'amazon' && kind === 'detail' && device === 'all')) throw httpError(400, '亚马逊详情图请选择电脑版或手机版');
 
   const rawRows = request.body?.rows;
   let normalizedRows: number[][];

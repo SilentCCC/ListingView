@@ -10,13 +10,17 @@ coverage/
 .env.*
 !.env.example
 !.env.*.example
+vision-config.json
+vision-config.json.*
 
-# Runtime state and logs
+# Runtime state, shortcuts and logs
 .listingview-process.json
+*.lnk
 *.log
 
-# Local product data and SQLite databases (including journal/WAL files)
+# Local product data, uploads, backups and SQLite databases (including journal/WAL files)
 data/
+uploads/
 *.sqlite
 *.sqlite-*
 *.sqlite.*
@@ -24,8 +28,10 @@ data/
 *.db
 *.db-*
 *.db.*
+*backup*.zip
+*backup*.tar.gz
 
-# Operating system files
+# Operating system and editor files
 .DS_Store
 Thumbs.db
 Desktop.ini

@@ -103,6 +103,9 @@ export async function initDatabase() {
       db.pragma('foreign_keys = ON');
     }
   }
+  // Convert legacy Amazon detail fallback rows (device = 'all') to desktop detail rows
+  // after removing the "通用回退" tab from the editor.
+  db.exec("UPDATE images SET device = 'desktop' WHERE scope = 'amazon' AND kind = 'detail' AND device = 'all'");
   db.exec('DROP INDEX IF EXISTS idx_images_product_scope_kind_order');
   db.exec('CREATE INDEX IF NOT EXISTS idx_images_product_scope_kind_device_order ON images(product_id, scope, kind, device, sort_order)');
   const sampleProduct = db.prepare('SELECT id FROM products LIMIT 1').get() as { id?: number } | undefined;
