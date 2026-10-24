@@ -3,9 +3,9 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DATA_DIR=${DATA_DIR:-"$ROOT_DIR/data"}
-PORT=${PORT:-4000}
+PORT=${PORT:-5172}
 CLIENT_DIST_DIR=${CLIENT_DIST_DIR:-"$ROOT_DIR/client/dist"}
-CORS_ORIGIN=${CORS_ORIGIN:-"http://localhost:4000"}
+CORS_ORIGIN=${CORS_ORIGIN:-"http://localhost:5172"}
 ADMIN_PASSWORD=${ADMIN_PASSWORD:-""}
 
 mkdir -p "$DATA_DIR/uploads"

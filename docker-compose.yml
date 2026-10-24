@@ -2,13 +2,13 @@ services:
   listing-view:
     build: .
     ports:
-      - "${PORT:-4000}:4000"
+      - "${PORT:-5172}:5172"
     environment:
       NODE_ENV: production
-      PORT: 4000
+      PORT: 5172
       DATA_DIR: /data
       CLIENT_DIST_DIR: /app/client/dist
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5172}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       VISION_API_BASE_URL: ${VISION_API_BASE_URL:-}
       VISION_API_KEY: ${VISION_API_KEY:-}

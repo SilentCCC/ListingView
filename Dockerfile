@@ -15,17 +15,17 @@ RUN npm --prefix server run build
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=4000
+ENV PORT=5172
 ENV DATA_DIR=/data
 ENV CLIENT_DIST_DIR=/app/client/dist
-ENV CORS_ORIGIN=http://localhost:4000
+ENV CORS_ORIGIN=http://localhost:5172
 COPY --from=build /app/server/package*.json server/
 COPY --from=build /app/server/node_modules server/node_modules
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/client/dist client/dist
 RUN mkdir -p /data/uploads && chown -R node:node /app /data
 USER node
-EXPOSE 4000
+EXPOSE 5172
 VOLUME ["/data"]
 CMD ["npm", "--prefix", "server", "run", "start"]
 

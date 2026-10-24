@@ -1,6 +1,6 @@
 param(
   [int]$ClientPort = 5173,
-  [int]$ServerPort = 4000
+  [int]$ServerPort = 5172
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +18,7 @@ foreach ($dependencyPath in @(
 
 $env:PORT = "$ServerPort"
 $env:VITE_PORT = "$ClientPort"
+$env:VITE_API_PROXY_TARGET = "http://localhost:$ServerPort"
 $env:DATA_DIR = Join-Path $root 'data'
 $env:CLIENT_DIST_DIR = Join-Path $root 'client/dist'
 $env:CORS_ORIGIN = "http://localhost:$ClientPort"
@@ -33,7 +34,7 @@ if (Test-Path -LiteralPath $processFile) {
 }
 
 $npmCommand = (Get-Command npm.cmd -ErrorAction Stop).Source
-$process = Start-Process -FilePath $npmCommand -ArgumentList 'run', 'dev' -WorkingDirectory $root -PassThru
+$process = Start-Process -FilePath $npmCommand -ArgumentList 'run', 'dev' -WorkingDirectory $root -WindowStyle Hidden -PassThru
 @{ ProcessId = $process.Id; Root = $root } | ConvertTo-Json | Set-Content -LiteralPath $processFile -Encoding utf8
 Write-Host "ListingView is starting. Frontend: http://localhost:$ClientPort"
 Write-Host "Use the ListingView Stop shortcut to close it."

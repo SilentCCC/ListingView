@@ -10,7 +10,7 @@ const dataDirValue = process.env.DATA_DIR || path.join(projectRoot, 'data');
 export const dataDir = path.isAbsolute(dataDirValue) ? dataDirValue : path.resolve(serverRoot, dataDirValue);
 export const uploadsDir = path.join(dataDir, 'uploads');
 export const databasePath = path.join(dataDir, 'listing-view.sqlite');
-export const port = Number(process.env.PORT || 4000);
+export const port = Number(process.env.PORT || 5172);
 export const nodeEnv = process.env.NODE_ENV || 'development';
 export const clientDistDir = process.env.CLIENT_DIST_DIR
   ? (path.isAbsolute(process.env.CLIENT_DIST_DIR) ? process.env.CLIENT_DIST_DIR : path.resolve(serverRoot, process.env.CLIENT_DIST_DIR))
