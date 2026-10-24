@@ -4,6 +4,7 @@
 *.tsbuildinfo
 .git
 .gitignore
+README.md
 .env
 .env.*
 !.env.example
