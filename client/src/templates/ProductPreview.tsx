@@ -5,7 +5,7 @@ import { TmallTemplate } from './TmallTemplate';
 import './amazon.css';
 import './tmall.css';
 
-export function ProductPreview({ product, products, platform, device, onPreview }: { product: Product; products: Product[]; platform: Platform; device: Device; onPreview: (image: ProductImage) => void }) {
+export function ProductPreview({ product, products, platform, device, onPreview, onSelectProduct }: { product: Product; products: Product[]; platform: Platform; device: Device; onPreview: (image: ProductImage) => void; onSelectProduct?: (product: Product) => void }) {
   const recommendations = useMemo(() => {
     const candidates = products.filter((item) => item.id !== product.id && (item.effectiveImages.amazon.main.length > 0 || item.effectiveImages.tmall.main.length > 0 || item.images.some((image) => image.kind === 'main')));
     for (let index = candidates.length - 1; index > 0; index -= 1) {
@@ -16,6 +16,6 @@ export function ProductPreview({ product, products, platform, device, onPreview 
   }, [product.id, products]);
 
   return <div className={`preview-shell preview-shell--${device}`}>
-    {platform === 'amazon' ? <AmazonTemplate product={product} recommendations={recommendations} device={device} onPreview={onPreview} /> : <TmallTemplate product={product} device={device} onPreview={onPreview} />}
+    {platform === 'amazon' ? <AmazonTemplate product={product} recommendations={recommendations} device={device} onPreview={onPreview} onSelectProduct={onSelectProduct} /> : <TmallTemplate product={product} device={device} onPreview={onPreview} />}
   </div>;
 }

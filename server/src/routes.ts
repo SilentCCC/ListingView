@@ -7,7 +7,9 @@ import { asyncRoute, httpError } from './http.js';
 import { ensureStoredFileDirectory, pruneStoredFileDirectories, removeStoredFile, resolveStoredFilePath, saveUploadedFile, validateUploadedFile } from './storage.js';
 import { getVisionSettingsStatus, recognizeProductImages } from './vision.js';
 import { clearSavedVisionConfig, saveVisionConfig } from './vision-config.js';
-import type { Device, ImageDevice, ImageKind, ImageScope, Platform, Product, ProductImage } from './types.js';
+import { getSiteSettings, saveSiteSettings } from './site-settings.js';
+import { applyIncomingSyncCommit, diffSyncManifest, getSyncStatus, pushSyncToRemote, saveSyncConfig, writeIncomingSyncFile } from './sync.js';
+import type { CustomSpecItem, Device, ImageDevice, ImageKind, ImageScope, Platform, Product, ProductCategory, ProductImage, ProductSpecs } from './types.js';
 import { maxFileSizeBytes } from './config.js';
 import multer from 'multer';
 import { platformImageEntries, streamImageZip } from './image-export.js';
@@ -25,7 +27,7 @@ const upload = multer({
 
 const productSelect = `
   SELECT
-    p.id, p.name, p.sku, p.generic_title AS genericTitle, p.generic_price AS genericPrice,
+    p.id, p.name, p.sku, p.category, p.specs_json AS specsJson, p.generic_title AS genericTitle, p.generic_price AS genericPrice,
     p.created_at AS createdAt, p.updated_at AS updatedAt,
     ac.title AS amazonTitle, ac.price AS amazonPrice,
     tc.title AS tmallTitle, tc.price AS tmallPrice
@@ -33,6 +35,54 @@ const productSelect = `
   LEFT JOIN platform_content ac ON ac.product_id = p.id AND ac.platform = 'amazon'
   LEFT JOIN platform_content tc ON tc.product_id = p.id AND tc.platform = 'tmall'
 `;
+
+const BAG_SPEC_KEYS = ['mainFabric', 'lining', 'outerSize', 'innerSize', 'color', 'weight', 'capacity', 'other'] as const;
+const TRIPOD_SPEC_KEYS = ['material', 'loadCapacity', 'maxWorkingHeight', 'minWorkingHeight', 'foldedLength', 'weight', 'sections', 'other'] as const;
+
+function parseCategory(value: unknown): ProductCategory {
+  if (value === 'tripod' || value === 'other' || value === 'bag') return value;
+  return 'bag';
+}
+
+function sanitizeSpecsObject(raw: unknown, category: ProductCategory): ProductSpecs {
+  if (!raw || typeof raw !== 'object') return {};
+  const source = raw as Record<string, unknown>;
+  const result: ProductSpecs = {};
+  if (category === 'bag' && source.bag && typeof source.bag === 'object') {
+    const bagRecord: Record<string, string> = {};
+    for (const key of BAG_SPEC_KEYS) {
+      const val = String((source.bag as Record<string, unknown>)[key] ?? '').trim();
+      if (val) bagRecord[key] = val.slice(0, 200);
+    }
+    if (Object.keys(bagRecord).length) result.bag = bagRecord;
+  } else if (category === 'tripod' && source.tripod && typeof source.tripod === 'object') {
+    const tripodRecord: Record<string, string> = {};
+    for (const key of TRIPOD_SPEC_KEYS) {
+      const val = String((source.tripod as Record<string, unknown>)[key] ?? '').trim();
+      if (val) tripodRecord[key] = val.slice(0, 200);
+    }
+    if (Object.keys(tripodRecord).length) result.tripod = tripodRecord;
+  } else if (category === 'other' && Array.isArray(source.other)) {
+    const otherList: CustomSpecItem[] = [];
+    for (const item of source.other.slice(0, 50)) {
+      if (!item || typeof item !== 'object') continue;
+      const label = String((item as Record<string, unknown>).label ?? '').trim().slice(0, 100);
+      const value = String((item as Record<string, unknown>).value ?? '').trim().slice(0, 200);
+      if (label || value) otherList.push({ label, value });
+    }
+    if (otherList.length) result.other = otherList;
+  }
+  return result;
+}
+
+function parseSpecsJson(raw: unknown, category: ProductCategory): ProductSpecs {
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    return sanitizeSpecsObject(JSON.parse(raw), category);
+  } catch {
+    return {};
+  }
+}
 
 function normalizeProduct(row: any): Product {
   const images = db.prepare(`
@@ -56,6 +106,8 @@ function normalizeProduct(row: any): Product {
     id: row.id,
     name: row.name,
     sku: row.sku,
+    category: parseCategory(row.category),
+    specs: parseSpecsJson(row.specsJson, parseCategory(row.category)),
     genericTitle: row.genericTitle,
     genericPrice: row.genericPrice == null ? null : Number(row.genericPrice),
     platforms: {
@@ -324,6 +376,54 @@ router.post('/auth/logout', (request, response) => {
   response.json({ status: { authenticated: !current.passwordRequired, passwordRequired: current.passwordRequired } });
 });
 
+router.get('/settings', (_request, response) => {
+  response.json(getSiteSettings());
+});
+
+router.put('/settings', requireAdmin, (request, response) => {
+  response.json(saveSiteSettings(request.body));
+});
+
+router.get('/sync/status', requireAdmin, (_request, response) => {
+  response.json(getSyncStatus());
+});
+
+router.put('/sync/config', requireAdmin, (request, response) => {
+  saveSyncConfig({ remoteUrl: request.body?.remoteUrl });
+  response.json(getSyncStatus());
+});
+
+router.post('/sync/push', requireAdmin, asyncRoute(async (request, response) => {
+  const result = await pushSyncToRemote({
+    remoteUrl: request.body?.remoteUrl,
+    password: request.body?.password,
+  });
+  response.json({ result, status: getSyncStatus() });
+}));
+
+router.post('/sync/receive/diff', requireAdmin, (request, response) => {
+  const files = Array.isArray(request.body?.files) ? request.body.files : [];
+  response.json(diffSyncManifest(files));
+});
+
+router.post('/sync/receive/file', requireAdmin, upload.single('file'), (request, response) => {
+  const file = request.file;
+  if (!file) throw httpError(400, '缺少上传的图片文件');
+  const storedName = String(request.body?.storedName || '').trim();
+  const sha256 = String(request.body?.sha256 || '').trim() || undefined;
+  writeIncomingSyncFile(storedName, file.buffer, sha256);
+  response.json({ ok: true });
+});
+
+router.post('/sync/receive/commit', requireAdmin, asyncRoute(async (request, response) => {
+  const result = await applyIncomingSyncCommit({
+    databaseBase64: request.body?.databaseBase64,
+    siteSettings: request.body?.siteSettings,
+    expectedFiles: request.body?.expectedFiles,
+  });
+  response.json(result);
+}));
+
 router.get('/vision/status', requireAdmin, (_request, response) => {
   response.json(getVisionSettingsStatus());
 });
@@ -378,6 +478,7 @@ router.get('/products/:id', (request, response) => {
 });
 
 router.get('/products/:id/export', asyncRoute(async (request, response) => {
+  if (!getSiteSettings().showPreviewDownload) throw httpError(403, '预览图片下载功能已关闭');
   const platform = request.query.platform;
   if (platform !== 'amazon' && platform !== 'tmall') throw httpError(400, '请选择亚马逊或天猫平台');
   const product = normalizeProduct(requireProduct(parseId(request.params.id)));
@@ -390,14 +491,16 @@ router.post('/products', requireAdmin, (request, response) => {
   const name = validateText(request.body?.name, '商品名称');
   const sku = validateText(request.body?.sku, '商品编号');
   productImageDirectory(0, sku, 'main');
+  const category = parseCategory(request.body?.category);
+  const specsJson = JSON.stringify(sanitizeSpecsObject(request.body?.specs, category));
   const genericTitle = validateText(request.body?.genericTitle, '通用标题', false);
   const genericPrice = parseOptionalPrice(request.body?.genericPrice);
   const platforms = request.body?.platforms || {};
-  const insert = db.prepare(`INSERT INTO products (name, sku, generic_title, generic_price) VALUES (?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT INTO products (name, sku, category, specs_json, generic_title, generic_price) VALUES (?, ?, ?, ?, ?, ?)`);
   const insertPlatform = db.prepare(`INSERT INTO platform_content (product_id, platform, title, price) VALUES (?, ?, ?, ?)`);
   try {
     const created = db.transaction(() => {
-      const result = insert.run(name, sku, genericTitle, genericPrice);
+      const result = insert.run(name, sku, category, specsJson, genericTitle, genericPrice);
       for (const platform of ['amazon', 'tmall'] as const) {
         const content = platforms[platform] || {};
         insertPlatform.run(result.lastInsertRowid, platform, validateText(content.title, `${platform} 标题`, false), parseOptionalPrice(content.price));
@@ -418,6 +521,8 @@ router.put('/products/:id', requireAdmin, (request, response) => {
   const name = validateText(request.body?.name, '商品名称');
   const sku = validateText(request.body?.sku, '商品编号');
   productImageDirectory(id, sku, 'main');
+  const category = request.body?.category !== undefined ? parseCategory(request.body?.category) : parseCategory(previous.category);
+  const specsJson = request.body?.specs !== undefined ? JSON.stringify(sanitizeSpecsObject(request.body?.specs, category)) : JSON.stringify(parseSpecsJson(previous.specsJson, category));
   const genericTitle = validateText(request.body?.genericTitle, '通用标题', false);
   const genericPrice = parseOptionalPrice(request.body?.genericPrice);
   const platforms = request.body?.platforms || {};
@@ -430,15 +535,22 @@ router.put('/products/:id', requireAdmin, (request, response) => {
   })) as Record<Platform, { title: string; price: number | null }>;
   const duplicateSku = db.prepare('SELECT id FROM products WHERE sku = ? AND id <> ?').get(sku, id) as { id?: number } | undefined;
   if (duplicateSku) throw httpError(409, '商品编号已经存在');
-  const update = (values: { name: string; sku: string; genericTitle: string; genericPrice: number | null }, content: Record<Platform, { title: string; price: number | null }>, updatedAt?: string) => {
-    db.prepare(`UPDATE products SET name = ?, sku = ?, generic_title = ?, generic_price = ?, updated_at = COALESCE(?, CURRENT_TIMESTAMP) WHERE id = ?`).run(values.name, values.sku, values.genericTitle, values.genericPrice, updatedAt ?? null, id);
+  const update = (values: { name: string; sku: string; category: string; specsJson: string; genericTitle: string; genericPrice: number | null }, content: Record<Platform, { title: string; price: number | null }>, updatedAt?: string) => {
+    db.prepare(`UPDATE products SET name = ?, sku = ?, category = ?, specs_json = ?, generic_title = ?, generic_price = ?, updated_at = COALESCE(?, CURRENT_TIMESTAMP) WHERE id = ?`).run(values.name, values.sku, values.category, values.specsJson, values.genericTitle, values.genericPrice, updatedAt ?? null, id);
     for (const platform of ['amazon', 'tmall'] as const) {
       db.prepare('UPDATE platform_content SET title = ?, price = ? WHERE product_id = ? AND platform = ?').run(content[platform].title, content[platform].price, id, platform);
     }
   };
   renameProductImages(id, sku,
-    () => update({ name, sku, genericTitle, genericPrice }, platformValues),
-    () => update(previous, {
+    () => update({ name, sku, category, specsJson, genericTitle, genericPrice }, platformValues),
+    () => update({
+      name: previous.name,
+      sku: previous.sku,
+      category: parseCategory(previous.category),
+      specsJson: String(previous.specsJson || '{}'),
+      genericTitle: previous.genericTitle,
+      genericPrice: previous.genericPrice,
+    }, {
       amazon: { title: previous.amazonTitle, price: previous.amazonPrice },
       tmall: { title: previous.tmallTitle, price: previous.tmallPrice },
     }, previous.updatedAt),

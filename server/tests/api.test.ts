@@ -521,9 +521,93 @@ try {
   const authedUpdate = await fetch(`${base}/api/products/${migratedLegacy.id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
-    body: JSON.stringify({ name: 'Authed Legacy Product', sku: migratedLegacy.sku, genericTitle: 'Legacy title', genericPrice: 20, platforms: { amazon: { title: '', price: null }, tmall: { title: '', price: null } } }),
+    body: JSON.stringify({
+      name: 'Authed Legacy Product',
+      sku: migratedLegacy.sku,
+      category: 'tripod',
+      specs: {
+        bag: { mainFabric: '牛津布', capacity: '20L', other: '附带防雨罩' },
+        tripod: { material: '碳纤维', loadCapacity: '8 kg', weight: '1.2 kg', sections: '4 节', other: '含云台快装板' },
+        other: [{ label: '最大尺寸', value: '45 cm' }, { label: '', value: '   ' }],
+      },
+      genericTitle: 'Legacy title',
+      genericPrice: 20,
+      platforms: { amazon: { title: '', price: null }, tmall: { title: '', price: null } },
+    }),
   });
   assert(authedUpdate.ok, 'authenticated admin should be able to save product');
+  const updatedProductBody = await authedUpdate.json() as { product: any };
+  assert(updatedProductBody.product.category === 'tripod', 'product category should persist as tripod');
+  assert(updatedProductBody.product.specs?.tripod?.material === '碳纤维' && updatedProductBody.product.specs?.tripod?.loadCapacity === '8 kg' && updatedProductBody.product.specs?.tripod?.other === '含云台快装板', 'tripod preset specs including other should persist');
+  assert(updatedProductBody.product.specs?.bag === undefined && updatedProductBody.product.specs?.other === undefined, 'only the selected category specs should be stored on a product');
+  const otherCategoryUpdate = await fetch(`${base}/api/products/${migratedLegacy.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
+    body: JSON.stringify({
+      name: 'Authed Legacy Product',
+      sku: migratedLegacy.sku,
+      category: 'other',
+      specs: {
+        tripod: { material: '碳纤维' },
+        other: [{ label: '最大尺寸', value: '45 cm' }, { label: '', value: '   ' }],
+      },
+      genericTitle: 'Legacy title',
+      genericPrice: 20,
+      platforms: { amazon: { title: '', price: null }, tmall: { title: '', price: null } },
+    }),
+  });
+  assert(otherCategoryUpdate.ok, 'switching product category to other should succeed');
+  const otherCategoryBody = await otherCategoryUpdate.json() as { product: any };
+  assert(otherCategoryBody.product.category === 'other', 'product category should switch to other');
+  assert(otherCategoryBody.product.specs?.tripod === undefined && Array.isArray(otherCategoryBody.product.specs?.other) && otherCategoryBody.product.specs.other.length === 1 && otherCategoryBody.product.specs.other[0].label === '最大尺寸', 'switching category to other should clear previous category specs and persist valid custom rows');
+
+  const initialSettings = await fetch(`${base}/api/settings`).then((r) => r.json()) as { showPreviewDownload: boolean };
+  assert(initialSettings.showPreviewDownload === true, 'showPreviewDownload should default to true');
+  assert((await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ showPreviewDownload: false }),
+  })).status === 401, 'unauthenticated settings update must be rejected with 401');
+  const disableDownloadRes = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
+    body: JSON.stringify({ showPreviewDownload: false }),
+  });
+  assert(disableDownloadRes.ok, 'authenticated admin should be able to update settings');
+  const updatedSettings = await disableDownloadRes.json() as { showPreviewDownload: boolean };
+  assert(updatedSettings.showPreviewDownload === false, 'updated settings should disable preview download');
+  assert((await fetch(`${base}/api/products/${migratedLegacy.id}/export?platform=amazon`)).status === 403, 'export must return 403 when preview download is disabled');
+  const enableDownloadRes = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
+    body: JSON.stringify({ showPreviewDownload: true }),
+  });
+  assert(enableDownloadRes.ok, 're-enabling preview download should succeed');
+
+  // Verify sync status & push endpoints (including one-time password auth)
+  assert((await fetch(`${base}/api/sync/status`)).status === 401, 'unauthenticated sync status must be rejected with 401');
+  const syncStatusRes = await fetch(`${base}/api/sync/status`, {
+    headers: { Authorization: `Bearer ${loginBody.token}` },
+  });
+  assert(syncStatusRes.ok, 'authenticated admin should get sync status');
+  const syncStatusBody = await syncStatusRes.json() as { remoteUrl: string; localProductCount: number; localImageFileCount: number };
+  assert(syncStatusBody.remoteUrl === 'http://139.9.40.151:4000' && syncStatusBody.localProductCount >= 1 && syncStatusBody.localImageFileCount >= 1, 'sync status should return default remote url and local counts');
+
+  const badSyncPushRes = await fetch(`${base}/api/sync/push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
+    body: JSON.stringify({ remoteUrl: base, password: 'wrong-password' }),
+  });
+  assert(badSyncPushRes.status === 400, 'sync push with wrong remote password should fail with 400');
+
+  const selfSyncPushRes = await fetch(`${base}/api/sync/push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.token}` },
+    body: JSON.stringify({ remoteUrl: base, password: 'secret-admin-pass' }),
+  });
+  assert(selfSyncPushRes.ok, 'sync push with valid one-time remote password should succeed');
+  const selfSyncPushBody = await selfSyncPushRes.json() as { result: { productCount: number; uploadedImageFiles: number }; status: { lastSyncedAt: string | null } };
+  assert(selfSyncPushBody.result.productCount >= 1 && selfSyncPushBody.result.uploadedImageFiles === 0 && Boolean(selfSyncPushBody.status.lastSyncedAt), 'sync push should report synced products, 0 missing files on identical target, and update lastSyncedAt');
 
   console.log('API integration test passed: legacy migration, CRUD, platform/device fallback, grid order, vision, SKU/kind directories, rule naming, shared files, content deduplication, legacy duplicate merge and rollback, filename swaps, collision protection, rollback, SKU changes, restart and deletion');
 

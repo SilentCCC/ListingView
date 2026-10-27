@@ -13,6 +13,7 @@ import {
 import type { Device, Product, ProductImage } from '../types';
 import { imageUrl } from '../api';
 import { DetailLayoutOverviewModal, groupImagesIntoRows } from '../components/ImageManager';
+import { getDisplaySpecs } from '../components/PreviewControls';
 
 function splitPrice(price: number | null) {
   if (price == null || !Number.isFinite(Number(price))) return null;
@@ -84,8 +85,13 @@ function AmazonDetailCarouselRow({ row, rowIndex, productName, onPreview }: { ro
       </div>
     </div>
   );
-}export function AmazonTemplate({ product, recommendations, device, onPreview }: { product: Product; recommendations: Product[]; device: Device; onPreview: (image: ProductImage) => void }) {
+}export function AmazonTemplate({ product, recommendations, device, onPreview, onSelectProduct }: { product: Product; recommendations: Product[]; device: Device; onPreview: (image: ProductImage) => void; onSelectProduct?: (product: Product) => void }) {
   const [activeImage, setActiveImage] = useState(0);
+  const openRecommendedProduct = (item: Product) => {
+    setActiveImage(0);
+    onSelectProduct?.(item);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const [detailOverviewOpen, setDetailOverviewOpen] = useState(false);
   const images = product.effectiveImages.amazon.main;
   const details = product.effectiveImages.amazon.detailByDevice[device];
@@ -93,6 +99,7 @@ function AmazonDetailCarouselRow({ row, rowIndex, productName, onPreview }: { ro
   const title = product.platforms.amazon.title || product.genericTitle || product.name;
   const price = product.platforms.amazon.price ?? product.genericPrice;
   const selectedImage = images[activeImage] ?? images[0];
+  const displaySpecs = getDisplaySpecs(product);
   const priceParts = splitPrice(price);
   const totalSlots = 6;
   const recommendationSlots = [
@@ -165,10 +172,11 @@ function AmazonDetailCarouselRow({ row, rowIndex, productName, onPreview }: { ro
         </div>
         <div className="amazon-divider" />
         <section className="amazon-spec-table" aria-label="商品参数">
-          <div><span>商品名称</span><strong>{product.name}</strong></div>
-          <div><span>商品编号</span><strong>{product.sku}</strong></div>
-          <div><span>主图数量</span><strong>{images.length ? `${images.length} 张` : '未上传'}</strong></div>
-          <div><span>详情图（{device === 'desktop' ? '电脑版' : '手机版'}）</span><strong>{details.length ? `${details.length} 张` : '未上传'}</strong></div>
+          {displaySpecs.length > 0 ? displaySpecs.map((spec, index) => (
+            <div key={`${spec.label}-${index}`}><span>{spec.label}</span><strong>{spec.value}</strong></div>
+          )) : (
+            <div><span>商品参数</span><strong>暂未录入</strong></div>
+          )}
         </section>
         <div className="amazon-divider" />
         <section className="amazon-about">
@@ -221,14 +229,16 @@ function AmazonDetailCarouselRow({ row, rowIndex, productName, onPreview }: { ro
               <button
                 type="button"
                 className="amazon-recommendation-card__image"
-                onClick={() => image && onPreview(image)}
-                disabled={!image}
-                aria-label={`查看 ${item.name} 主图`}
+                onClick={() => openRecommendedProduct(item)}
+                aria-label={`跳转到 ${item.name} 商品预览`}
               >{image && <img src={imageUrl(image)} alt={item.name} loading="lazy" />}</button>
               <a
-                href="#amazon-also-viewed-title"
+                href={`#product-${item.id}`}
                 className="amazon-recommendation-card__title"
-                onClick={(event) => event.preventDefault()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  openRecommendedProduct(item);
+                }}
                 title={itemTitle}
               >{itemTitle}</a>
               <small className="amazon-recommendation-card__sku">SKU: {item.sku}</small>

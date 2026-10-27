@@ -32,20 +32,30 @@ class SqliteCompat {
   prepare(sql: string) { return new PreparedStatement(this.database, sql); }
   pragma(sql: string) { this.database.run(`PRAGMA ${sql}`); }
   transaction<T>(callback: () => T) { return () => { this.database.run('BEGIN'); try { const result = callback(); this.database.run('COMMIT'); return result; } catch (error) { this.database.run('ROLLBACK'); throw error; } }; }
+  exportBytes(): Uint8Array {
+    const bytes = this.database.export();
+    this.database.run('PRAGMA foreign_keys = ON');
+    return bytes;
+  }
+  close() {
+    this.database.close();
+  }
   persist() {
     const temporaryPath = `${databasePath}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(temporaryPath, Buffer.from(this.database.export()), { flag: 'wx', mode: 0o640 });
+      fs.writeFileSync(temporaryPath, Buffer.from(this.exportBytes()), { flag: 'wx', mode: 0o640 });
+      fs.rmSync(databasePath, { force: true });
       fs.renameSync(temporaryPath, databasePath);
     } finally {
-      // sql.js export reopens its connection and resets connection pragmas.
-      this.database.run('PRAGMA foreign_keys = ON');
       fs.rmSync(temporaryPath, { force: true });
     }
   }
 }
 export let db: SqliteCompat;
-export async function initDatabase() {
+export async function initDatabase(options?: { seedSampleIfEmpty?: boolean }) {
+  if (db) {
+    try { db.close(); } catch { /* ignore */ }
+  }
   const SQL: SqlJsStatic = await initSqlJs({ locateFile: (file) => path.join(sqlWasmDir, file) });
   const database = fs.existsSync(databasePath) ? new SQL.Database(new Uint8Array(fs.readFileSync(databasePath))) : new SQL.Database();
   db = new SqliteCompat(database);
@@ -57,6 +67,14 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_products_updated_at ON products(updated_at DESC);
 
   `);
+  const productColumns = db.prepare('PRAGMA table_info(products)').all() as Array<{ name: string }>;
+  if (!productColumns.some((column) => column.name === 'category')) {
+    db.exec("ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT 'bag'");
+  }
+  if (!productColumns.some((column) => column.name === 'specs_json')) {
+    db.exec("ALTER TABLE products ADD COLUMN specs_json TEXT NOT NULL DEFAULT '{}'");
+  }
+
   let imageColumns = db.prepare('PRAGMA table_info(images)').all() as Array<{ name: string }>;
   if (!imageColumns.some((column) => column.name === 'device')) {
     db.exec("ALTER TABLE images ADD COLUMN device TEXT NOT NULL DEFAULT 'all'");
@@ -109,7 +127,7 @@ export async function initDatabase() {
   db.exec('DROP INDEX IF EXISTS idx_images_product_scope_kind_order');
   db.exec('CREATE INDEX IF NOT EXISTS idx_images_product_scope_kind_device_order ON images(product_id, scope, kind, device, sort_order)');
   const sampleProduct = db.prepare('SELECT id FROM products LIMIT 1').get() as { id?: number } | undefined;
-  if (!sampleProduct) {
+  if (!sampleProduct && options?.seedSampleIfEmpty !== false) {
     const insertProduct = db.prepare('INSERT INTO products (name, sku, generic_title, generic_price) VALUES (?, ?, ?, ?)');
     const insertPlatform = db.prepare('INSERT INTO platform_content (product_id, platform, title, price) VALUES (?, ?, ?, ?)');
     db.transaction(() => {
@@ -120,5 +138,24 @@ export async function initDatabase() {
   }
   db.persist();
 }
-
-
+export async function replaceDatabaseBytes(bytes: Uint8Array): Promise<void> {
+  const SQL: SqlJsStatic = await initSqlJs({ locateFile: (file) => path.join(sqlWasmDir, file) });
+  const testDb = new SQL.Database(bytes);
+  try {
+    const tables = testDb.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'products'");
+    if (!tables.length || !tables[0].values.length) {
+      throw new Error('无效的 SQLite 商品数据库文件');
+    }
+  } finally {
+    testDb.close();
+  }
+  const temporaryPath = `${databasePath}.${randomUUID()}.sync.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, Buffer.from(bytes), { flag: 'wx', mode: 0o640 });
+    fs.rmSync(databasePath, { force: true });
+    fs.renameSync(temporaryPath, databasePath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+  await initDatabase({ seedSampleIfEmpty: false });
+}

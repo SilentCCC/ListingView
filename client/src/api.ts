@@ -1,7 +1,31 @@
-import type { AuthStatus, Product, ProductImage, ImageDevice, ImageKind, ImageScope, Platform, RecognitionResult, VisionConfigInput, VisionStatus } from './types';
+import type { AuthStatus, Product, ProductImage, ImageDevice, ImageKind, ImageScope, Platform, RecognitionResult, SiteSettings, SyncPushResult, SyncStatus, VisionConfigInput, VisionStatus } from './types';
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '';
 const ADMIN_TOKEN_STORAGE_KEY = 'listingview_admin_token';
+const SITE_SETTINGS_STORAGE_KEY = 'listingview_site_settings';
+
+export function getStoredSiteSettings(): SiteSettings {
+  try {
+    const raw = window.localStorage.getItem(SITE_SETTINGS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SiteSettings>;
+      if (typeof parsed.showPreviewDownload === 'boolean') {
+        return { showPreviewDownload: parsed.showPreviewDownload };
+      }
+    }
+  } catch {
+    // Ignore localStorage parse errors
+  }
+  return { showPreviewDownload: true };
+}
+
+export function setStoredSiteSettings(settings: SiteSettings) {
+  try {
+    window.localStorage.setItem(SITE_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 function getStoredAdminToken(): string {
   try {
@@ -48,6 +72,41 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getAuthStatus: () => request<AuthStatus>('/api/auth/status'),
+  getSiteSettings: async (): Promise<SiteSettings> => {
+    try {
+      const settings = await request<SiteSettings>('/api/settings');
+      setStoredSiteSettings(settings);
+      return settings;
+    } catch {
+      return getStoredSiteSettings();
+    }
+  },
+  saveSiteSettings: async (payload: SiteSettings): Promise<SiteSettings> => {
+    setStoredSiteSettings(payload);
+    try {
+      const settings = await request<SiteSettings>('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setStoredSiteSettings(settings);
+      return settings;
+    } catch (error: any) {
+      if (error?.status === 401) throw error;
+      return payload;
+    }
+  },
+  getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
+  saveSyncConfig: (remoteUrl: string) => request<SyncStatus>('/api/sync/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remoteUrl }),
+  }),
+  pushSyncToServer: (payload: { remoteUrl: string; password?: string }) => request<{ result: SyncPushResult; status: SyncStatus }>('/api/sync/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }),
   loginAdmin: async (password: string) => {
     const result = await request<{ status: AuthStatus; token: string }>('/api/auth/login', {
       method: 'POST',

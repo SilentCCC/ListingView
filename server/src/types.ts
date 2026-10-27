@@ -3,6 +3,18 @@ export type Device = 'desktop' | 'mobile';
 export type ImageDevice = 'all' | Device;
 export type ImageKind = 'main' | 'detail';
 export type ImageScope = Platform | 'common';
+export type ProductCategory = 'bag' | 'tripod' | 'other';
+
+export interface CustomSpecItem {
+  label: string;
+  value: string;
+}
+
+export interface ProductSpecs {
+  bag?: Record<string, string>;
+  tripod?: Record<string, string>;
+  other?: CustomSpecItem[];
+}
 
 export interface ProductImage {
   id: number;
@@ -29,6 +41,8 @@ export interface Product {
   id: number;
   name: string;
   sku: string;
+  category: ProductCategory;
+  specs: ProductSpecs;
   genericTitle: string;
   genericPrice: number | null;
   platforms: Record<Platform, PlatformContent>;

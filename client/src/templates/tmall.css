@@ -68,3 +68,9 @@
 .tmall-frame.mobile .tmall-detail-tabs { padding: 0 10px; gap: 10px; }
 .tmall-frame.mobile .tmall-detail-tabs__links { gap: 16px; }
 .tmall-frame.mobile .tmall-detail-images { padding: 0 10px 13px; }
+.tmall-service--specs { grid-template-columns: 48px 1fr; align-items: start; }
+.tmall-service__list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; }
+.tmall-service__item { display: flex; align-items: baseline; gap: 4px; min-width: 0; font-size: 10px; line-height: 1.45; }
+.tmall-service__item small { color: #999; font-size: 10px; flex: 0 0 auto; }
+.tmall-service__item b { color: #333; font-weight: 500; overflow-wrap: anywhere; }
+.tmall-frame.mobile .tmall-service__list { grid-template-columns: 1fr; }
