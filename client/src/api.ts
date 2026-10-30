@@ -1,4 +1,4 @@
-import type { AuthStatus, Product, ProductImage, ImageDevice, ImageKind, ImageScope, Platform, RecognitionResult, SiteSettings, SyncPushResult, SyncStatus, VisionConfigInput, VisionStatus } from './types';
+import type { AuthStatus, DownloadPlatform, PreviewPlatform, Product, ProductCategory, ProductImage, ImageDevice, ImageKind, ImageScope, Platform, RecognitionResult, RecognitionSpecsResult, SiteSettings, SyncPushResult, SyncStatus, VisionConfigInput, VisionStatus } from './types';
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '';
 const ADMIN_TOKEN_STORAGE_KEY = 'listingview_admin_token';
@@ -63,8 +63,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.error || `请求失败（${response.status}）`) as Error & { status?: number };
+    const error = new Error(data.error || `请求失败（${response.status}）`) as Error & { status?: number; diagnostic?: string; diagnosticTruncated?: boolean };
     error.status = response.status;
+    if (typeof data.diagnostic === 'string') error.diagnostic = data.diagnostic;
+    if (data.diagnosticTruncated === true) error.diagnosticTruncated = true;
     throw error;
   }
   return data as T;
@@ -121,7 +123,7 @@ export const api = {
     const result = await request<{ status: AuthStatus }>('/api/auth/logout', { method: 'POST' });
     return result.status;
   },
-  downloadPlatformImages: async (product: Product, platform: Platform) => {
+  downloadPlatformImages: async (product: Product, platform: DownloadPlatform) => {
     const response = await fetch(`${apiBase}/api/products/${product.id}/export?platform=${platform}`);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
@@ -132,7 +134,7 @@ export const api = {
     const link = document.createElement('a');
     const disposition = response.headers.get('Content-Disposition') || '';
     const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
-    link.download = encodedName ? decodeURIComponent(encodedName) : product.sku.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-') + '-' + (platform === 'amazon' ? '亚马逊' : '天猫') + '.zip';
+    link.download = encodedName ? decodeURIComponent(encodedName) : product.sku.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-') + '-' + ({ amazon: '亚马逊', tmall: '天猫', temu: 'Temu', aliexpress: 'AliExpress' } as Record<PreviewPlatform, string>)[platform] + '.zip';
     link.href = objectUrl;
     document.body.appendChild(link);
     link.click();
@@ -148,6 +150,9 @@ export const api = {
   resetVisionConfig: () => request<VisionStatus>('/api/vision/config', { method: 'DELETE' }),
   recognizeProduct: (id: number, imageIds: number[]) => request<{ result: RecognitionResult }>(`/api/products/${id}/recognize`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageIds }),
+  }),
+  recognizeProductSpecs: (id: number, imageId: number, category: ProductCategory) => request<{ result: RecognitionSpecsResult }>(`/api/products/${id}/recognize-specs`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageId, category }),
   }),
   getProduct: (id: number) => request<{ product: Product }>(`/api/products/${id}`),
   saveProduct: (payload: Partial<Product> & { platforms: Product['platforms'] }, id?: number) => request<{ product: Product }>(id ? `/api/products/${id}` : '/api/products', {

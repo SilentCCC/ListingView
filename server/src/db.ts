@@ -63,7 +63,7 @@ export async function initDatabase(options?: { seedSampleIfEmpty?: boolean }) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, sku TEXT NOT NULL UNIQUE, generic_title TEXT NOT NULL DEFAULT '', generic_price REAL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS platform_content (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, platform TEXT NOT NULL CHECK (platform IN ('amazon', 'tmall')), title TEXT NOT NULL DEFAULT '', price REAL, UNIQUE(product_id, platform));
-    CREATE TABLE IF NOT EXISTS images (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, scope TEXT NOT NULL CHECK (scope IN ('common', 'amazon', 'tmall')), kind TEXT NOT NULL CHECK (kind IN ('main', 'detail')), device TEXT NOT NULL DEFAULT 'all' CHECK (device IN ('all', 'desktop', 'mobile')), original_name TEXT NOT NULL, stored_name TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS images (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, scope TEXT NOT NULL CHECK (scope IN ('common', 'amazon', 'tmall')), kind TEXT NOT NULL CHECK (kind IN ('main', 'sku', 'detail')), device TEXT NOT NULL DEFAULT 'all' CHECK (device IN ('all', 'desktop', 'mobile')), original_name TEXT NOT NULL, stored_name TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS idx_products_updated_at ON products(updated_at DESC);
 
   `);
@@ -91,9 +91,9 @@ export async function initDatabase(options?: { seedSampleIfEmpty?: boolean }) {
   }
 
   // Imports are references to the same physical file. Older databases used
-  // UNIQUE(stored_name), so migrate that constraint away before sharing files.
+  // UNIQUE(stored_name) or lacked 'sku' in CHECK(kind IN ...), so migrate before use.
   const imageTableSql = String((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'images'").get() as { sql?: string } | undefined)?.sql || '');
-  if (/stored_name\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(imageTableSql)) {
+  if (/stored_name\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(imageTableSql) || !/'sku'/i.test(imageTableSql)) {
     db.pragma('foreign_keys = OFF');
     try {
       db.exec(`
@@ -101,7 +101,7 @@ export async function initDatabase(options?: { seedSampleIfEmpty?: boolean }) {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
           scope TEXT NOT NULL CHECK (scope IN ('common', 'amazon', 'tmall')),
-          kind TEXT NOT NULL CHECK (kind IN ('main', 'detail')),
+          kind TEXT NOT NULL CHECK (kind IN ('main', 'sku', 'detail')),
           device TEXT NOT NULL DEFAULT 'all' CHECK (device IN ('all', 'desktop', 'mobile')),
           original_name TEXT NOT NULL,
           stored_name TEXT NOT NULL,

@@ -7,6 +7,7 @@ coverage/
 
 # Local documentation (keep locally, do not upload to GitHub)
 README.md
+LISTINGVIEW-HANDOFF*.md
 
 # Local environment files and secrets; keep example templates tracked
 .env

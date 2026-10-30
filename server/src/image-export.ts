@@ -16,7 +16,7 @@ let activeExports = 0;
 export function platformImageEntries(product: Product, platform: Platform, safeSku: string): ExportEntry[] {
   const effective = product.effectiveImages[platform];
   // A platform download includes both device layouts, excluding unused fallbacks.
-  const selected = [...effective.main, ...effective.detailByDevice.desktop, ...effective.detailByDevice.mobile] as StoredImage[];
+  const selected = [...effective.main, ...(platform === 'tmall' ? effective.sku : []), ...effective.detailByDevice.desktop, ...effective.detailByDevice.mobile] as StoredImage[];
   const images = product.images as StoredImage[];
   const commonOwners = new Map(images.filter((image) => image.scope === 'common').map((image) => [image.kind + ':' + image.storedName, image]));
   const seen = new Set<string>();
@@ -27,7 +27,8 @@ export function platformImageEntries(product: Product, platform: Platform, safeS
     seen.add(key);
     // Imported common materials retain common ownership, even when referenced by a platform.
     const owner = commonOwners.get(key) || image;
-    const kind = image.kind === 'main' ? '主图' : '详情图';
+    const folder = image.kind === 'main' ? '主图' : image.kind === 'sku' ? 'SKU' : '详情图';
+    const kind = image.kind === 'main' ? '主图' : image.kind === 'sku' ? 'sku' : '详情图';
     const scope = owner.scope === 'common' ? '' : owner.scope === 'amazon' ? '-亚马逊' : '-天猫';
     const device = owner.device === 'all' ? '' : owner.device === 'desktop' ? '-电脑' : '-手机';
     const prefix = safeSku + scope + device + '-' + kind;
@@ -38,7 +39,27 @@ export function platformImageEntries(product: Product, platform: Platform, safeS
     const filePath = resolveStoredFilePath(image.storedName);
     const stat = fs.statSync(filePath, { throwIfNoEntry: false });
     if (!stat?.isFile()) throw httpError(404, '部分图片文件不存在，请检查素材后重试');
-    return [{ name: kind + '/' + prefix + '-' + String(order).padStart(2, '0') + extension, filePath, stat }];
+    return [{ name: folder + '/' + prefix + '-' + String(order).padStart(2, '0') + extension, filePath, stat }];
+  });
+}
+
+export function commonImageEntries(product: Product, safeSku: string): ExportEntry[] {
+  const images = (product.images as StoredImage[])
+    .filter((image) => image.scope === 'common' && (image.kind === 'main' || image.kind === 'detail'))
+    .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'main' ? -1 : 1) || a.sortOrder - b.sortOrder || a.rowOrder - b.rowOrder || a.colOrder - b.colOrder || a.id - b.id);
+  const counters = new Map<string, number>();
+  return images.flatMap((image) => {
+    const folder = image.kind === 'main' ? '主图' : '详情图';
+    const kind = image.kind === 'main' ? '主图' : '详情图';
+    const prefix = safeSku + '-' + kind;
+    const order = (counters.get(prefix) || 0) + 1;
+    counters.set(prefix, order);
+    const extension = path.posix.extname(image.storedName).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(extension)) throw httpError(400, '图片文件格式不可下载');
+    const filePath = resolveStoredFilePath(image.storedName);
+    const stat = fs.statSync(filePath, { throwIfNoEntry: false });
+    if (!stat?.isFile()) throw httpError(404, '部分图片文件不存在，请检查素材后重试');
+    return [{ name: folder + '/' + prefix + '-' + String(order).padStart(2, '0') + extension, filePath, stat }];
   });
 }
 
@@ -64,6 +85,9 @@ export async function streamImageZip(response: Response, entries: ExportEntry[],
     // STORE mode preserves bytes and avoids spending CPU recompressing image formats.
     zip.addEmptyDirectory('主图/');
     zip.addEmptyDirectory('详情图/');
+    if (entries.some((entry) => entry.name.startsWith('SKU/'))) {
+      zip.addEmptyDirectory('SKU/');
+    }
     for (const entry of entries) {
       zip.addReadStreamLazy(entry.name, { compress: false, size: entry.stat.size, mtime: entry.stat.mtime, mode: 0o100644 }, (callback) => {
         fs.open(entry.filePath, 'r', (openError, fd) => {

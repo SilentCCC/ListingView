@@ -1,0 +1,90 @@
+.temu-page { min-width: 0; color: #242424; background: #fff; font-family: Arial, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.temu-promo { min-height: 35px; padding: 0 22px; display: flex; align-items: center; justify-content: center; gap: clamp(18px, 5vw, 70px); color: #f8f5a4; background: #080808; font-size: 11px; }
+.temu-promo span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.temu-promo__join { padding: 4px 11px; border: 1px solid #777; border-radius: 4px; color: #fff; }
+.temu-header { min-height: 58px; padding: 8px clamp(14px, 3vw, 38px); display: grid; grid-template-columns: auto auto minmax(170px, 1fr) auto auto; align-items: center; gap: clamp(12px, 2.3vw, 32px); border-bottom: 1px solid #eee; }
+.temu-logo { display: flex; align-items: center; gap: 5px; color: #fff; font-size: 10px; font-weight: 800; }
+.temu-logo b { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: #ff7900; font-size: 19px; }
+.temu-nav { display: flex; align-items: center; gap: 18px; color: #333; font-size: 11px; white-space: nowrap; }
+.temu-search { height: 36px; min-width: 0; padding-left: 13px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #262626; border-radius: 20px; color: #9b9b9b; font-size: 11px; }
+.temu-search button { width: 31px; height: 31px; margin-right: 2px; display: grid; place-items: center; border: 0; border-radius: 50%; color: #fff; background: #161616; }
+.temu-header__account { display: flex; align-items: center; gap: 5px; color: #505050; font-size: 11px; white-space: nowrap; }
+.temu-breadcrumb { min-height: 34px; padding: 0 clamp(14px, 3vw, 38px); display: flex; align-items: center; gap: 8px; overflow: hidden; color: #858585; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.temu-breadcrumb span { color: #b5b5b5; }
+.preview-workspace .preview-shell.preview-shell--temu { overflow: visible; }
+.preview-shell--temu .temu-page { overflow: visible; border-radius: 12px; }
+.temu-product { max-width: 1400px; margin: 0 auto; padding: 0 clamp(14px, 3vw, 38px) 36px; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(330px, .92fr); align-items: start; gap: 24px clamp(22px, 3vw, 42px); }
+.temu-gallery { min-width: 0; grid-column: 1; grid-row: 1; }
+.temu-gallery__main { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: start; gap: 10px; }
+.temu-thumbnails { max-height: 560px; overflow: auto; display: flex; flex-direction: column; gap: 7px; }
+.temu-thumbnails button { width: 42px; height: 48px; padding: 2px; flex: 0 0 auto; overflow: hidden; border: 1px solid #e7e7e7; border-radius: 4px; background: #fff; }
+.temu-thumbnails button.is-active { border: 2px solid #ff7900; }
+.temu-thumbnails img { width: 100%; height: 100%; object-fit: cover; }
+.temu-thumbnails > span { width: 42px; height: 48px; display: grid; place-items: center; border: 1px solid #eee; color: #a0a0a0; font-size: 10px; }
+.temu-stage { position: relative; min-width: 0; aspect-ratio: 1 / 1; overflow: hidden; display: grid; place-items: center; background: #f6f6f6; }
+.temu-stage > img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+.temu-stage__empty { padding: 20px; color: #969696; font-size: 13px; }
+.temu-stage__arrow { position: absolute; top: 50%; width: 34px; height: 42px; transform: translateY(-50%); display: grid; place-items: center; border: 0; color: #333; background: rgba(255,255,255,.88); }
+.temu-stage__arrow--left { left: 0; }
+.temu-stage__arrow--right { right: 0; }
+.temu-info { min-width: 0; grid-column: 2; grid-row: 1; align-self: start; position: sticky; top: 90px; padding: 3px 0 12px; background: #fff; z-index: 1; }
+.temu-delivery { display: flex; align-items: center; gap: 6px; color: #208b42; font-size: 12px; font-weight: 700; }
+.temu-delivery span { color: #777; font-size: 10px; font-weight: 400; }
+.temu-info h1 { margin: 12px 0 8px; color: #242424; font-size: 20px; line-height: 1.5; font-weight: 650; overflow-wrap: anywhere; }
+.temu-sku { color: #777; font-size: 11px; }
+.temu-price { min-height: 60px; margin-top: 15px; padding: 10px 12px; display: flex; align-items: baseline; gap: 12px; background: #fff4e9; }
+.temu-price > span { color: #745a45; font-size: 11px; }
+.temu-price strong { color: #222; font-size: 28px; }
+.temu-price small { margin-right: 3px; font-size: 15px; }
+.temu-benefits { min-height: 38px; padding: 0 12px; display: flex; align-items: center; gap: 20px; color: #30894b; background: #fffaf5; font-size: 11px; }
+.temu-benefits span { display: flex; align-items: center; gap: 4px; }
+.temu-variant { min-height: 60px; margin-top: 14px; padding: 10px 0; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid #eee; font-size: 11px; }
+.temu-variant > span { color: #777; }
+.temu-variant strong { padding: 8px 12px; border: 1px solid #ff7900; border-radius: 4px; font-weight: 500; }
+.temu-actions { margin: 14px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.temu-actions button { min-height: 42px; border: 1px solid #ff7900; border-radius: 22px; color: #ff7900; background: #fff; font-size: 13px; font-weight: 700; }
+.temu-actions button:last-child { color: #fff; background: #ff7900; }
+.temu-service { min-height: 44px; display: flex; align-items: center; gap: 8px; color: #555; font-size: 11px; }
+.temu-service svg:first-child { color: #218b45; }
+.temu-service svg:last-child { margin-left: auto; color: #999; }
+.temu-specs { margin-top: 8px; border-top: 1px solid #eee; }
+.temu-specs > div { min-height: 34px; padding: 7px 4px; display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; border-bottom: 1px solid #f0f0f0; font-size: 11px; }
+.temu-specs span { color: #888; }
+.temu-specs b { color: #333; font-weight: 500; overflow-wrap: anywhere; }
+.temu-common-details { min-width: 0; display: grid; align-content: start; gap: 10px; }
+.temu-common-details img { display: block; width: 100%; height: auto; cursor: zoom-in; }
+.aliexpress-placeholder { min-height: 500px; padding: 22px clamp(18px, 4vw, 50px); background: #fff; color: #333; }
+.aliexpress-placeholder__brand { min-height: 42px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #eee; color: #d33; font-size: 16px; font-weight: 750; }
+.aliexpress-placeholder__content { min-height: 390px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.aliexpress-placeholder__icon { width: 54px; height: 54px; margin-bottom: 15px; display: grid; place-items: center; border: 1px solid #eee; border-radius: 50%; color: #888; }
+.aliexpress-placeholder__content h3 { color: #303030; font-size: 16px; font-weight: 650; }
+.aliexpress-placeholder__content p { margin-top: 8px; color: #898989; font-size: 12px; line-height: 1.6; }
+.aliexpress-placeholder__assets { max-width: 900px; margin: 22px auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.aliexpress-placeholder__assets button { min-width: 0; padding: 0; overflow: hidden; border: 1px solid #eee; border-radius: 4px; background: #f7f7f7; cursor: zoom-in; }
+.aliexpress-placeholder__assets img { display: block; width: 100%; height: auto; }
+.aliexpress-placeholder--mobile .aliexpress-placeholder__assets { grid-template-columns: 1fr; gap: 8px; }
+.preview-shell--mobile .temu-page { width: 390px; max-width: 100%; }
+.temu-page--mobile .temu-promo { min-height: 30px; gap: 10px; padding: 0 7px; font-size: 9px; }
+.temu-page--mobile .temu-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; padding: 8px 10px; }
+.temu-page--mobile .temu-nav, .temu-page--mobile .temu-header__account { display: none; }
+.temu-page--mobile .temu-search { height: 32px; }
+.temu-page--mobile .temu-breadcrumb { padding: 0 12px; }
+.temu-page--mobile .temu-product { padding: 0 12px 24px; grid-template-columns: 1fr; grid-template-rows: auto auto auto; gap: 16px; }
+.temu-page--mobile .temu-gallery { grid-column: 1; grid-row: 1; }
+.temu-page--mobile .temu-gallery__main { grid-template-columns: 36px minmax(0, 1fr); gap: 7px; }
+.temu-page--mobile .temu-info { position: static; grid-column: 1; grid-row: 2; padding: 0; }
+.temu-page--mobile .temu-common-details { grid-column: 1; grid-row: 3; }
+.temu-page--mobile .temu-thumbnails { max-height: 390px; }
+.temu-page--mobile .temu-thumbnails button, .temu-page--mobile .temu-thumbnails > span { width: 36px; height: 42px; }
+.temu-page--mobile .temu-info h1 { font-size: 17px; }
+.temu-page--mobile .temu-common-details { padding: 0 12px 24px; gap: 8px; }
+.aliexpress-placeholder--mobile { min-height: 470px; }
+@media (max-width: 680px) {
+  .temu-promo { justify-content: flex-start; overflow: hidden; gap: 15px; padding: 0 10px; }
+  .temu-promo__join, .temu-nav, .temu-header__account { display: none; }
+  .temu-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; padding: 8px 12px; }
+  .temu-product { grid-template-columns: 1fr; gap: 16px; }
+  .temu-gallery__main { grid-template-columns: 36px minmax(0, 1fr); gap: 7px; }
+  .temu-thumbnails button, .temu-thumbnails > span { width: 36px; height: 42px; }
+  .temu-info h1 { font-size: 17px; }
+}

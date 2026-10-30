@@ -185,7 +185,7 @@ export function ImageManager({ product, scope, kind, device = 'all', gridMode = 
     <div className={`image-manager ${gridMode ? 'image-manager--grid' : ''}`}>
       <div className="image-manager__header">
         <div>
-          <h4>{kind === 'main' ? '主图' : '详情图'}</h4>
+          <h4>{kind === 'main' ? '主图' : kind === 'sku' ? 'sku' : '详情图'}</h4>
           <span>
             {gridMode
               ? `${images.length} 张 · 共 ${rows.length} 行（每行最多 3 张，可上下左右拖动编排）`

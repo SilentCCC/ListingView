@@ -5,14 +5,14 @@ import path from 'node:path';
 import { db } from './db.js';
 import { asyncRoute, httpError } from './http.js';
 import { ensureStoredFileDirectory, pruneStoredFileDirectories, removeStoredFile, resolveStoredFilePath, saveUploadedFile, validateUploadedFile } from './storage.js';
-import { getVisionSettingsStatus, recognizeProductImages } from './vision.js';
+import { getVisionSettingsStatus, recognizeProductImages, recognizeProductSpecs } from './vision.js';
 import { clearSavedVisionConfig, saveVisionConfig } from './vision-config.js';
 import { getSiteSettings, saveSiteSettings } from './site-settings.js';
 import { applyIncomingSyncCommit, diffSyncManifest, getSyncStatus, pushSyncToRemote, saveSyncConfig, writeIncomingSyncFile } from './sync.js';
 import type { CustomSpecItem, Device, ImageDevice, ImageKind, ImageScope, Platform, Product, ProductCategory, ProductImage, ProductSpecs } from './types.js';
 import { maxFileSizeBytes } from './config.js';
 import multer from 'multer';
-import { platformImageEntries, streamImageZip } from './image-export.js';
+import { commonImageEntries, platformImageEntries, streamImageZip } from './image-export.js';
 import { getAuthStatus, loginAdmin, requireAdmin } from './auth.js';
 
 const router = Router();
@@ -128,7 +128,7 @@ function buildEffectiveImages(images: ProductImage[], platform: Platform) {
     if (platform !== 'amazon') return detail;
     return images.filter((image) => image.scope === 'amazon' && image.kind === 'detail' && image.device === device);
   };
-  return { main: scoped('main'), detail, detailByDevice: { desktop: amazonDetailsFor('desktop'), mobile: amazonDetailsFor('mobile') } };
+  return { main: scoped('main'), sku: scoped('sku'), detail, detailByDevice: { desktop: amazonDetailsFor('desktop'), mobile: amazonDetailsFor('mobile') } };
 }
 
 function getProductRow(id: number) {
@@ -210,14 +210,20 @@ function productImageDirectory(productId: number, sku: string, kind: ImageKind):
       throw httpError(409, '商品编号生成的图片目录与其他商品重复，请使用不同编号（不区分大小写）');
     }
   }
-  return path.posix.join(folder, kind === 'main' ? '主图' : '详情图');
+  return path.posix.join(folder, kind === 'main' ? '主图' : kind === 'sku' ? 'SKU' : '详情图');
+}
+
+function imageKindLabel(kind: ImageKind): string {
+  if (kind === 'main') return '主图';
+  if (kind === 'sku') return 'sku';
+  return '详情图';
 }
 
 function imageCategory(image: ImageFileRow): string {
-  if (image.scope === 'common') return image.kind === 'main' ? '主图' : '详情图';
+  if (image.scope === 'common') return imageKindLabel(image.kind);
   const platform = image.scope === 'amazon' ? '亚马逊' : '天猫';
   if (image.kind === 'detail' && image.device !== 'all') return `${platform}-${image.device === 'desktop' ? '电脑' : '手机'}-详情图`;
-  return `${platform}-${image.kind === 'main' ? '主图' : '详情图'}`;
+  return `${platform}-${imageKindLabel(image.kind)}`;
 }
 
 function buildImageRenamePlan(productId: number, sku: string): ImageRenamePlan[] {
@@ -465,6 +471,25 @@ router.post('/products/:id/recognize', requireAdmin, asyncRoute(async (request, 
   response.json({ result });
 }));
 
+router.post('/products/:id/recognize-specs', requireAdmin, asyncRoute(async (request, response) => {
+  const productId = parseId(request.params.id);
+  requireProduct(productId);
+  const imageId: unknown = request.body?.imageId;
+  const category: unknown = request.body?.category;
+  if (!Number.isInteger(imageId) || (imageId as number) <= 0) throw httpError(400, '请选择一张已上传图片');
+  if (category !== 'bag' && category !== 'tripod' && category !== 'other') throw httpError(400, '商品类目无效');
+
+  const image = db.prepare('SELECT id, stored_name AS storedName, mime_type AS mimeType FROM images WHERE product_id = ? AND id = ?').get(productId, imageId) as { id: number; storedName: string; mimeType: string } | undefined;
+  if (!image) throw httpError(404, '所选图片不存在或不属于当前商品');
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(image.mimeType)) throw httpError(415, '参数识别仅支持 JPG、PNG、WEBP 图片');
+  const filePath = resolveStoredFilePath(image.storedName);
+  const stat = fs.statSync(filePath, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.size > maxFileSizeBytes) throw httpError(400, '图片文件不存在或超出识别大小限制');
+
+  const result = await recognizeProductSpecs({ mimeType: image.mimeType, buffer: fs.readFileSync(filePath) }, category);
+  response.json({ result });
+}));
+
 router.get('/products', (request, response) => {
   const search = String(request.query.search || '').trim();
   const rows = search
@@ -480,9 +505,14 @@ router.get('/products/:id', (request, response) => {
 router.get('/products/:id/export', asyncRoute(async (request, response) => {
   if (!getSiteSettings().showPreviewDownload) throw httpError(403, '预览图片下载功能已关闭');
   const platform = request.query.platform;
-  if (platform !== 'amazon' && platform !== 'tmall') throw httpError(400, '请选择亚马逊或天猫平台');
   const product = normalizeProduct(requireProduct(parseId(request.params.id)));
   const sku = safeFilePart(product.sku);
+  if (platform === 'temu' || platform === 'aliexpress') {
+    const label = platform === 'temu' ? 'Temu' : 'AliExpress';
+    await streamImageZip(response, commonImageEntries(product, sku), sku + '-' + label + '.zip');
+    return;
+  }
+  if (platform !== 'amazon' && platform !== 'tmall') throw httpError(400, '请选择有效平台');
   const entries = platformImageEntries(product, platform, sku);
   await streamImageZip(response, entries, sku + '-' + (platform === 'amazon' ? '亚马逊' : '天猫') + '.zip');
 }));
@@ -598,7 +628,7 @@ router.post('/products/:id/images', requireAdmin, upload.array('files', 30), (re
   const scope = String(request.body?.scope || 'common') as ImageScope;
   const kind = String(request.body?.kind || 'main') as ImageKind;
   const device = String(request.body?.device || 'all') as ImageDevice;
-  if (!['common', 'amazon', 'tmall'].includes(scope) || !['main', 'detail'].includes(kind)) throw httpError(400, '图片范围或类型无效');
+  if (!['common', 'amazon', 'tmall'].includes(scope) || !['main', 'sku', 'detail'].includes(kind) || (kind === 'sku' && scope !== 'tmall')) throw httpError(400, '图片范围或类型无效');
   if (!['all', 'desktop', 'mobile'].includes(device) || (device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) || (scope === 'amazon' && kind === 'detail' && device === 'all')) throw httpError(400, '亚马逊详情图请选择电脑版或手机版');
   const maxStats = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS maxOrder, COALESCE(MAX(row_order), -1) AS maxRow FROM images WHERE product_id = ? AND scope = ? AND kind = ? AND device = ?').get(id, scope, kind, device) as { maxOrder: number; maxRow: number };
   const insert = db.prepare(`INSERT INTO images (product_id, scope, kind, device, original_name, stored_name, mime_type, size_bytes, sort_order, row_order, col_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -706,7 +736,7 @@ router.put('/products/:id/images/order', requireAdmin, (request, response) => {
   const scope = String(request.body?.scope || 'common') as ImageScope;
   const kind = String(request.body?.kind || 'main') as ImageKind;
   const device = String(request.body?.device || 'all') as ImageDevice;
-  if (!['common', 'amazon', 'tmall'].includes(scope) || !['main', 'detail'].includes(kind) || !['all', 'desktop', 'mobile'].includes(device)) throw httpError(400, '图片范围或类型无效');
+  if (!['common', 'amazon', 'tmall'].includes(scope) || !['main', 'sku', 'detail'].includes(kind) || (kind === 'sku' && scope !== 'tmall') || !['all', 'desktop', 'mobile'].includes(device)) throw httpError(400, '图片范围或类型无效');
   if ((device !== 'all' && (scope !== 'amazon' || kind !== 'detail')) || (scope === 'amazon' && kind === 'detail' && device === 'all')) throw httpError(400, '亚马逊详情图请选择电脑版或手机版');
 
   const rawRows = request.body?.rows;

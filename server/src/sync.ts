@@ -34,7 +34,7 @@ export interface SyncPushResult {
   removedRemoteFiles: number;
 }
 
-const DEFAULT_REMOTE_URL = 'http://139.9.40.151:4000';
+const DEFAULT_REMOTE_URL = '';
 const syncConfigPath = path.join(dataDir, 'sync-config.json');
 
 function normalizeRemoteUrl(input: unknown): string {

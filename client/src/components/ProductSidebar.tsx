@@ -283,7 +283,7 @@ export function ProductSidebar({
           <input
             value={search}
             onChange={(event: ChangeEvent<HTMLInputElement>) => onSearch(event.target.value)}
-            placeholder="搜索名称或编号"
+            placeholder="搜索名称或型号"
           />
         </div>
 
@@ -329,7 +329,7 @@ export function ProductSidebar({
             onClick={() => onSelect(product, 'preview')}
           >
             <strong title={product.name}>{product.name}</strong>
-            <span className="catalog-card__sku">编号：{product.sku}</span>
+            <span className="catalog-card__sku">型号：{product.sku}</span>
             <span className="catalog-card__price">{formatPrice(product.genericPrice)}</span>
           </div>
           <div className={`catalog-card__actions ${!canEdit ? 'catalog-card__actions--single' : ''}`}>

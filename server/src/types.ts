@@ -1,7 +1,8 @@
 export type Platform = 'amazon' | 'tmall';
+export type PreviewPlatform = Platform | 'temu' | 'aliexpress';
 export type Device = 'desktop' | 'mobile';
 export type ImageDevice = 'all' | Device;
-export type ImageKind = 'main' | 'detail';
+export type ImageKind = 'main' | 'sku' | 'detail';
 export type ImageScope = Platform | 'common';
 export type ProductCategory = 'bag' | 'tripod' | 'other';
 
@@ -47,7 +48,7 @@ export interface Product {
   genericPrice: number | null;
   platforms: Record<Platform, PlatformContent>;
   images: ProductImage[];
-  effectiveImages: Record<Platform, { main: ProductImage[]; detail: ProductImage[]; detailByDevice: Record<Device, ProductImage[]> }>;
+  effectiveImages: Record<Platform, { main: ProductImage[]; sku: ProductImage[]; detail: ProductImage[]; detailByDevice: Record<Device, ProductImage[]> }>;
   createdAt: string;
   updatedAt: string;
 }

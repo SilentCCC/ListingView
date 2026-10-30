@@ -36,8 +36,9 @@ legacyDatabase.close();
 const legacyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 fs.writeFileSync(path.join(dataDir, 'uploads', 'legacy.png'), legacyPng);
 for (const filename of ['duplicate-common.png', 'duplicate-amazon.png', 'duplicate-tmall.png', 'duplicate-detail.png']) fs.writeFileSync(path.join(dataDir, 'uploads', filename), legacyPng);
-let visionProviderMode: 'success' | 'malformed' = 'success';
+let visionProviderMode: 'success' | 'malformed' | 'truncated' | 'error-json' | 'missing-choices' | 'http-error' = 'success';
 let visionCalls = 0;
+let visionSentMaxTokens = false;
 let visionReceivedImage = false;
 let visionReceivedAuthorization = false;
 let visionReceivedModel = '';
@@ -49,11 +50,29 @@ const visionProvider = createServer((request, response) => {
     visionReceivedAuthorization = request.headers.authorization === 'Bearer saved-vision-key';
     const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     visionReceivedModel = payload.model;
+    visionSentMaxTokens = Object.hasOwn(payload, 'max_tokens');
     const content = payload.messages?.[1]?.content;
     visionReceivedImage = Array.isArray(content) && content.some((part: any) => part.type === 'image_url' && String(part.image_url?.url).startsWith('data:image/png;base64,'));
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ choices: [{ message: { content: visionProviderMode === 'success'
-      ? JSON.stringify({ name: '识别商品名称', genericTitle: '识别通用标题', amazonTitle: 'Amazon title suggestion', tmallTitle: '天猫标题建议' })
+    const isSpecRecognition = Array.isArray(content) && content.some((part: any) => part.type === 'text' && String(part.text).includes('商品参数'));
+    response.writeHead(visionProviderMode === 'http-error' ? 429 : 200, { 'Content-Type': 'application/json' });
+    if (visionProviderMode === 'error-json') {
+      response.end(JSON.stringify({ error: { message: 'quota exceeded: daily limit reached' } }));
+      return;
+    }
+    if (visionProviderMode === 'missing-choices') {
+      response.end(JSON.stringify({ id: 'response-without-choices', provider_message: 'model output omitted' }));
+      return;
+    }
+    if (visionProviderMode === 'http-error') {
+      response.end(JSON.stringify({ error: { message: 'upstream overloaded' } }));
+      return;
+    }
+    response.end(JSON.stringify({ choices: [{ finish_reason: visionProviderMode === 'truncated' ? 'length' : 'stop', message: { content: visionProviderMode === 'truncated'
+      ? ''
+      : visionProviderMode === 'success'
+      ? JSON.stringify(isSpecRecognition
+        ? { values: { mainFabric: '涤纶', capacity: '20L' }, other: [] }
+        : { name: '识别商品名称', genericTitle: '识别通用标题', amazonTitle: 'Amazon title suggestion', tmallTitle: '天猫标题建议' })
       : 'not a valid structured result' } }] }));
   });
 });
@@ -154,6 +173,11 @@ try {
   rejectedAmazonAllForm.append('scope', 'amazon'); rejectedAmazonAllForm.append('kind', 'detail'); rejectedAmazonAllForm.append('device', 'all');
   rejectedAmazonAllForm.append('files', new Blob([legacyPng], { type: 'image/png' }), 'invalid.png');
   assert((await fetch(`${base}/api/products/${created.product.id}/images`, { method: 'POST', body: rejectedAmazonAllForm })).status === 400, 'amazon detail device=all should be rejected');
+  const rejectedAmazonSkuForm = new FormData();
+  rejectedAmazonSkuForm.append('scope', 'amazon'); rejectedAmazonSkuForm.append('kind', 'sku'); rejectedAmazonSkuForm.append('device', 'all');
+  rejectedAmazonSkuForm.append('files', new Blob([legacyPng], { type: 'image/png' }), 'amazon-sku.png');
+  assert((await fetch(`${base}/api/products/${created.product.id}/images`, { method: 'POST', body: rejectedAmazonSkuForm })).status === 400, 'non-tmall sku upload should be rejected');
+  await uploadImage('tmall', 'all', 'sku');
   await uploadImage('tmall', 'all');
   const desktopUpload = await uploadImage('amazon', 'desktop');
   const mobileUpload = await uploadImage('amazon', 'mobile');
@@ -162,6 +186,7 @@ try {
   assert(desktopImage && mobileImage && desktopImage.id !== mobileImage.id, 'device-specific uploads were not stored separately');
   assert(mobileUpload.product.effectiveImages.amazon.detailByDevice.desktop[0].id === desktopImage.id, 'desktop preview selected the wrong detail images');
   assert(mobileUpload.product.effectiveImages.amazon.detailByDevice.mobile[0].id === mobileImage.id, 'mobile preview selected the wrong detail images');
+  assert(mobileUpload.product.effectiveImages.tmall.sku.length === 1 && mobileUpload.product.effectiveImages.tmall.sku[0].kind === 'sku', 'Tmall sku images should be included in effectiveImages.tmall.sku');
   assert(mobileUpload.product.effectiveImages.tmall.detail[0].scope === 'tmall', 'Tmall detail images should use Tmall platform assets only');
 
   await stopApp();
@@ -196,9 +221,46 @@ try {
   const recognitionBody = await recognition.json() as { result: any };
   assert(recognition.ok && recognitionBody.result.name === '识别商品名称' && recognitionBody.result.amazonTitle === 'Amazon title suggestion', 'image recognition result was not parsed');
   assert(visionReceivedImage && visionReceivedAuthorization, 'image or API key was not forwarded to the server-side vision provider');
+  assert(!visionSentMaxTokens, 'title recognition should not set a max_tokens limit');
   assert(visionProviderMode === 'success', 'vision provider should receive valid image content');
   assert(visionReceivedModel === 'saved-vision-model', 'configured model was not sent to the provider');
+  const specRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize-specs`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageId: uploaded.product.images[0].id, category: 'bag' }),
+  });
+  const specRecognitionBody = await specRecognition.json() as { result: { values: Record<string, string>; other: any[] } };
+  assert(specRecognition.ok && specRecognitionBody.result.values.mainFabric === '涤纶' && specRecognitionBody.result.values.capacity === '20L', 'product spec recognition result was not parsed');
+  assert(!visionSentMaxTokens, 'parameter recognition should not set a max_tokens limit');
+  const invalidSpecRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize-specs`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageId: 1, category: 'bag' }),
+  });
+  assert(invalidSpecRecognition.status === 404, 'parameter recognition accepted an image not owned by the product');
   visionProviderMode = 'malformed';
+  const malformedSpecRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize-specs`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageId: uploaded.product.images[0].id, category: 'bag' }),
+  });
+  const malformedSpecBody = await malformedSpecRecognition.json() as { error: string; diagnostic?: string; diagnosticTruncated?: boolean };
+  assert(malformedSpecRecognition.status === 502 && malformedSpecBody.error === '参数识别结果无法解析，请重试', 'malformed parameter recognition should preserve its user-facing error');
+  assert(malformedSpecBody.diagnostic === 'not a valid structured result' && malformedSpecBody.diagnosticTruncated === false, 'malformed parameter recognition should expose the model text for diagnosis');
+  visionProviderMode = 'truncated';
+  const visionCallsBeforeTruncatedResponse = visionCalls;
+  const truncatedSpecRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize-specs`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageId: uploaded.product.images[0].id, category: 'bag' }),
+  });
+  const truncatedSpecBody = await truncatedSpecRecognition.json() as { diagnostic?: string };
+  assert(truncatedSpecRecognition.status === 502 && truncatedSpecBody.diagnostic?.includes('"finish_reason":"length"') && truncatedSpecBody.diagnostic.includes('"content":""'), 'empty output caused by a model output limit should preserve the full provider response');
+  assert(visionCalls === visionCallsBeforeTruncatedResponse + 1 && !visionSentMaxTokens, 'truncated parameter recognition should not retry with an application token limit');
+  for (const [mode, expected] of [
+    ['error-json', 'quota exceeded: daily limit reached'],
+    ['missing-choices', 'model output omitted'],
+    ['http-error', 'upstream overloaded'],
+  ] as const) {
+    visionProviderMode = mode;
+    const response = await fetch(`${base}/api/products/${created.product.id}/recognize-specs`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageId: uploaded.product.images[0].id, category: 'bag' }),
+    });
+    const body = await response.json() as { error: string; diagnostic?: string };
+    assert(response.status === 502 && body.diagnostic?.includes(expected), `parameter recognition should expose provider details for ${mode}`);
+  }
   const malformedRecognition = await fetch(`${base}/api/products/${created.product.id}/recognize`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageIds: [uploaded.product.images[0].id] }),
   });
@@ -309,14 +371,16 @@ try {
   let savedProduct = await readProduct(created.product.id);
   await assertPreserved(savedProduct);
   const skuDirectory = path.join(dataDir, 'uploads', '5188');
-  assert(fs.readdirSync(skuDirectory).sort().join(',') === ['主图', '详情图'].sort().join(','), 'SKU must contain only image kind directories');
+  assert(fs.readdirSync(skuDirectory).sort().join(',') === ['SKU', '主图', '详情图'].sort().join(','), 'SKU must contain only image kind directories');
   const mainFiles = fs.readdirSync(path.join(skuDirectory, '主图'));
+  const skuFiles = fs.readdirSync(path.join(skuDirectory, 'SKU'));
   const detailFiles = fs.readdirSync(path.join(skuDirectory, '详情图'));
   assert(mainFiles.length === 1 && mainFiles.includes('5188-主图-01.png'), 'imported main must share one physical file');
+  assert(skuFiles.length === 1 && skuFiles.includes('5188-天猫-sku-01.png'), 'tmall sku image must be renamed in SKU directory');
   for (const name of ['5188-详情图-01.png', '5188-天猫-详情图-01.png', '5188-亚马逊-电脑-详情图-01.png', '5188-亚马逊-手机-详情图-01.png']) {
     assert(detailFiles.includes(name), `missing classified image: ${name}`);
   }
-  assert(mainFiles.length + detailFiles.length === new Set(savedProduct.images.map((image: any) => image.storedName)).size, 'imports duplicated physical files');
+  assert(mainFiles.length + skuFiles.length + detailFiles.length === new Set(savedProduct.images.map((image: any) => image.storedName)).size, 'imports duplicated physical files');
   assert(!fs.existsSync(path.join(dataDir, 'uploads', created.product.sku)), 'old empty SKU directory was not removed');
 
   // Swapping sequential filenames must preserve ID -> content and shared references.
@@ -591,7 +655,7 @@ try {
   });
   assert(syncStatusRes.ok, 'authenticated admin should get sync status');
   const syncStatusBody = await syncStatusRes.json() as { remoteUrl: string; localProductCount: number; localImageFileCount: number };
-  assert(syncStatusBody.remoteUrl === 'http://139.9.40.151:4000' && syncStatusBody.localProductCount >= 1 && syncStatusBody.localImageFileCount >= 1, 'sync status should return default remote url and local counts');
+  assert(syncStatusBody.remoteUrl === '' && syncStatusBody.localProductCount >= 1 && syncStatusBody.localImageFileCount >= 1, 'sync status should not expose a default remote url and should return local counts');
 
   const badSyncPushRes = await fetch(`${base}/api/sync/push`, {
     method: 'POST',

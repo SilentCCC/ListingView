@@ -1,4 +1,4 @@
-import type { CustomSpecItem, Platform, Product, ProductCategory, ProductSpecs } from '../types';
+import type { CustomSpecItem, DownloadPlatform, Platform, PreviewPlatform, Product, ProductCategory, ProductSpecs } from '../types';
 import { Download, LoaderCircle, Monitor, Smartphone } from 'lucide-react';
 
 export const PRODUCT_CATEGORIES: Array<{ key: ProductCategory; label: string }> = [
@@ -50,18 +50,24 @@ export function getDisplaySpecs(product: Pick<Product, 'category' | 'specs'>): C
 }
 
 export function PreviewControls({ platform, device, onPlatform, onDevice, onDownload, downloading, downloadDisabled }: {
-  platform: Platform;
+  platform: PreviewPlatform;
   device: 'desktop' | 'mobile';
-  onDownload?: (platform: Platform) => void;
-  downloading?: Platform | null;
+  onDownload?: (platform: DownloadPlatform) => void;
+  downloading?: DownloadPlatform | null;
   downloadDisabled?: boolean;
-  onPlatform: (value: Platform) => void;
-  onDevice: (platform: Platform, device: 'desktop' | 'mobile') => void;
+  onPlatform: (value: PreviewPlatform) => void;
+  onDevice: (platform: PreviewPlatform, device: 'desktop' | 'mobile') => void;
 }) {
+  const platforms: Array<{ id: PreviewPlatform; label: string; mark: string }> = [
+    { id: 'amazon', label: '亚马逊', mark: 'AMAZON' },
+    { id: 'tmall', label: '天猫', mark: 'TMALL' },
+    { id: 'temu', label: 'Temu', mark: 'TEMU' },
+    { id: 'aliexpress', label: 'AliExpress', mark: 'ALIEXPRESS' },
+  ];
   return <div className="preview-control-groups">
-    {(['amazon', 'tmall'] as Platform[]).map((item) => <div className={`preview-control-group ${platform === item ? 'is-active' : ''}`} key={item}>
-      <button className={`platform-button platform-button--${item}`} onClick={() => onPlatform(item)}><span>{item === 'amazon' ? '亚马逊' : '天猫'}</span><small>{item === 'amazon' ? 'Amazon' : 'TMALL'}</small></button>
-      <div className={`device-buttons ${onDownload ? 'device-buttons--download' : ''}`}><button className={platform === item && device === 'desktop' ? 'selected' : ''} onClick={() => onDevice(item, 'desktop')}><Monitor size={14} />电脑</button><button className={platform === item && device === 'mobile' ? 'selected' : ''} onClick={() => onDevice(item, 'mobile')}><Smartphone size={14} />手机</button>{onDownload && <button type="button" className="platform-download" disabled={downloadDisabled || !!downloading} aria-label={`下载${item === 'amazon' ? '亚马逊' : '天猫'}图片 ZIP`} title="下载该平台使用的原图（含电脑及手机详情图）" onClick={() => onDownload(item)}>{downloading === item ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}{downloading === item ? '打包中' : '下载'}</button>}</div>
+    {platforms.map(({ id, label, mark }) => <div className={`preview-control-group ${platform === id ? 'is-active' : ''}`} key={id}>
+      <button type="button" className={`platform-button platform-button--${id}`} aria-pressed={platform === id} onClick={() => onPlatform(id)}><span>{label}</span><small>{mark}</small></button>
+      <div className={`device-buttons ${onDownload ? 'device-buttons--download' : ''}`}><button type="button" className={platform === id && device === 'desktop' ? 'selected' : ''} onClick={() => onDevice(id, 'desktop')}><Monitor size={14} />电脑</button><button type="button" className={platform === id && device === 'mobile' ? 'selected' : ''} onClick={() => onDevice(id, 'mobile')}><Smartphone size={14} />手机</button>{onDownload && <button type="button" className="platform-download" disabled={downloadDisabled || !!downloading} aria-label={`下载${label}图片 ZIP`} title={id === 'temu' || id === 'aliexpress' ? '下载通用主图和详情图' : '下载该平台使用的原图（含电脑及手机详情图）'} onClick={() => onDownload(id)}>{downloading === id ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}{downloading === id ? '打包中' : '下载'}</button>}</div>
     </div>)}
   </div>;
 }

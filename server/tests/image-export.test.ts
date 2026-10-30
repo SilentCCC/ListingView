@@ -54,7 +54,7 @@ export async function testImageExport(base: string, dataDir: string): Promise<vo
     assert(response.ok, 'ZIP export request failed: ' + response.status);
     assert(response.headers.get('content-type') === 'application/zip', 'incorrect ZIP type');
     assert(response.headers.get('cache-control') === 'no-store', 'exports must not be cached');
-    const filename = sku + '-' + (platform === 'amazon' ? '亚马逊' : '天猫') + '.zip';
+    const filename = sku + '-' + ({ amazon: '亚马逊', tmall: '天猫', temu: 'Temu', aliexpress: 'AliExpress' } as Record<string, string>)[platform] + '.zip';
     assert(decodeURIComponent(response.headers.get('content-disposition') || '').includes(filename), 'Chinese download filename missing');
     assert(response.headers.get('access-control-expose-headers')?.includes('Content-Disposition'), 'separate frontend cannot read download filename');
     const files = await unzip(Buffer.from(await response.arrayBuffer()));
@@ -69,7 +69,15 @@ export async function testImageExport(base: string, dataDir: string): Promise<vo
   assert((await fetch(base + '/api/products/999999999/export?platform=amazon')).status === 404, 'unknown product must be rejected');
   await upload('common', 'main', 'all', [bytes('main1'), bytes('main2')]);
   await upload('common', 'detail', 'all', [bytes('detail1'), bytes('detail2')]);
-  // Common images must not appear in preview or platform export unless imported to that platform.
+  // Common images are exported for Temu/AliExpress, but not in Amazon/Tmall platform packs unless imported.
+  const commonExpected = {
+    ['主图/' + sku + '-主图-01.png']: bytes('main1'),
+    ['主图/' + sku + '-主图-02.png']: bytes('main2'),
+    ['详情图/' + sku + '-详情图-01.png']: bytes('detail1'),
+    ['详情图/' + sku + '-详情图-02.png']: bytes('detail2'),
+  };
+  await expectZip('temu', commonExpected);
+  await expectZip('aliexpress', commonExpected);
   assert((await fetch(url('amazon'))).status === 400, 'unimported common images must not be exported for Amazon');
   assert((await fetch(url('tmall'))).status === 400, 'unimported common images must not be exported for Tmall');
   const imported = await fetch(base + '/api/products/' + id + '/images/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'amazon', kind: 'main', device: 'all' }) });
@@ -98,11 +106,15 @@ export async function testImageExport(base: string, dataDir: string): Promise<vo
   assert(JSON.stringify(after.product) === snapshot, 'export must not save, reorder or rename product data');
   assert((await fetch(url('tmall'))).status === 400, 'Tmall must remain empty before importing or uploading Tmall images');
   await upload('tmall', 'main', 'all', [bytes('tmall-main')]);
+  await upload('tmall', 'sku', 'all', [bytes('tmall-sku')]);
   await upload('tmall', 'detail', 'all', [bytes('tmall-detail')]);
   await expectZip('tmall', {
     ['主图/' + sku + '-天猫-主图-01.png']: bytes('tmall-main'),
+    ['SKU/' + sku + '-天猫-sku-01.png']: bytes('tmall-sku'),
     ['详情图/' + sku + '-天猫-详情图-01.png']: bytes('tmall-detail'),
   });
+  await expectZip('temu', commonExpected);
+  await expectZip('aliexpress', commonExpected);
   const missing = current.images.find((image: Image) => image.device === 'desktop') as Image;
   const missingPath = path.join(dataDir, 'uploads', ...missing.storedName.split('/'));
   fs.renameSync(missingPath, missingPath + '.test-hidden');

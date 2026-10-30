@@ -25,7 +25,10 @@ app.use((error: any, _request: express.Request, response: express.Response, next
   const status = Number(error?.status) || (error?.code === 'LIMIT_FILE_SIZE' ? 413 : error?.code === 'LIMIT_UNEXPECTED_FILE' ? 400 : 500);
   const message = error?.code === 'LIMIT_FILE_SIZE' ? '图片大小超过限制' : error?.message || '服务器内部错误';
   if (status >= 500) console.error(error);
-  response.status(status).json({ error: message });
+  response.status(status).json({
+    error: message,
+    ...(typeof error?.diagnostic === 'string' ? { diagnostic: error.diagnostic, diagnosticTruncated: error.diagnosticTruncated === true } : {}),
+  });
 });
 app.listen(port, () => {
   console.log(`ListingView server listening on http://localhost:${port}`);
